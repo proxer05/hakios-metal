@@ -65,9 +65,19 @@ private:
 }  // namespace
 
 std::unique_ptr<Transport> openKernelGpu(std::string* why) {
-    io_service_t s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("HakiosGPU"));
+    // The msm request ABI is shared: hakios's HakiosGPU and the daisy port's VinceGPU/DaisyGPU answer the same
+    // selectors (0x09 GEM_CLOSE, 0x42 GEM_NEW, 0x46 SUBMIT, 0x47 WAIT_FENCE, 0x7e the surface import), each
+    // through a user client whose selector is the request's number.
+    static const char *const services[] = {"HakiosGPU", "VinceGPU", "DaisyGPU", "RedwoodGPU"};
+    io_service_t s = 0;
+    for (const char *name : services) {
+        s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(name));
+        if (s != 0) {
+            break;
+        }
+    }
     if (s == 0) {
-        *why = "no HakiosGPU service: the kernel has not started the GPU (gpu=1, the firmware in fw-gpu/, the phone)";
+        *why = "no GPU service: the kernel has not started the GPU (gpu=1 / adreno=11, the firmware, the phone)";
         return nullptr;
     }
     io_connect_t c = 0;
