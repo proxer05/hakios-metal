@@ -859,6 +859,9 @@ bool fillKernel(Translation& t, const KernelHome& out, uint32_t highestSampler, 
     k.driverParamsOffsetVec4 = ir3_const_can_upload(&cs->allocs, IR3_CONST_ALLOC_DRIVER_PARAMS, v->constlen)
                                    ? int32_t(cs->allocs.consts[IR3_CONST_ALLOC_DRIVER_PARAMS].offset_vec4)
                                    : -1;
+    k.uboPtrsOffsetVec4 = ir3_const_can_upload(&cs->allocs, IR3_CONST_ALLOC_UBO_PTRS, v->constlen)
+                              ? int32_t(cs->allocs.consts[IR3_CONST_ALLOC_UBO_PTRS].offset_vec4)
+                              : -1;
     k.numUbos = cs->num_ubos;
     k.numSsbos = v->num_ssbos;
     k.numIbos = v->num_ibos;
