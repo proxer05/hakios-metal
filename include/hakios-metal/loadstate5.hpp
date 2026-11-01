@@ -69,6 +69,51 @@ loadConstantsBuffer(std::vector<uint32_t> &out, uint32_t regid, uint64_t bufferA
     out.push_back(static_cast<uint32_t>(address >> 32));
 }
 
+// The UBO pointer table (fd5_emit.c's fd5_emit_const_ptrs): a direct load whose data is an address pair
+// (LO/HI) per UBO, at the UBO table's const regid. The pair count is even: an odd table is padded with a
+// zero address. The UBO sizes are regular constants (the shader's driver params), as ir3 emits them.
+inline void
+loadUboPointers(std::vector<uint32_t> &out, uint32_t regid, const uint64_t *addresses, uint32_t num)
+{
+    uint32_t anum = (num + 1u) & ~1u;
+    out.push_back(type7(kLoadState4, 3 + 2 * anum));
+    out.push_back(loadState4Word0(regid / 4, kSrcDirect, kBlockCsShader, anum / 2));
+    out.push_back(loadState4Word1(kStateConstants, 0));
+    out.push_back(0);
+    for (uint32_t i = 0; i < anum; i++) {
+        uint64_t a = i < num ? addresses[i] : 0;
+        out.push_back(static_cast<uint32_t>(a));
+        out.push_back(static_cast<uint32_t>(a >> 32));
+    }
+}
+
+// The device-buffer (SSBO) state (fd5_emit.c's emit_ssbos): two CP_LOAD_STATE4 packets, both
+// SB4_CS_SSBO with NUM_UNIT = the buffer count. The first, ST4_CONSTANTS, carries each buffer's size as
+// A5XX_SSBO_1 words (FMT 0, WIDTH = the low 16 bits of the byte size, HEIGHT = the high 16). The second,
+// ST4_UBO, carries each buffer's address as two words. "Unlike a6xx, SSBO size is in bytes" (fd5_emit.c).
+inline void
+loadSsbos(std::vector<uint32_t> &out, const uint64_t *addresses, const uint64_t *sizes, uint32_t count)
+{
+    out.push_back(type7(kLoadState4, 3 + 2 * count));
+    out.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
+    out.push_back(loadState4Word1(kStateConstants, 0));
+    out.push_back(0);
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t sz = sizes[i];
+        out.push_back((sz & 0xffffu) << 16);            // SSBO_1_0: FMT 0 << 8 | WIDTH
+        out.push_back(static_cast<uint32_t>(sz >> 16)); // SSBO_1_1: HEIGHT | DEPTH << 16
+    }
+
+    out.push_back(type7(kLoadState4, 3 + 2 * count));
+    out.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
+    out.push_back(loadState4Word1(kStateUbo, 0));
+    out.push_back(0);
+    for (uint32_t i = 0; i < count; i++) {
+        out.push_back(static_cast<uint32_t>(addresses[i]));
+        out.push_back(static_cast<uint32_t>(addresses[i] >> 32));
+    }
+}
+
 // The full shader-object packet (fd5_emit_shader_obj): six registers from SP_CS_OBJ_START_LO — the shader's
 // address, its private-memory parameter, address and size. A kernel that spills none writes zeros for the three
 // private-memory words; the sizes are in the units fd5 uses (MEMSIZEPERITEM in 128-bit units per fiber,

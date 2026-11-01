@@ -112,6 +112,45 @@ TEST(a5xx_dispatch_shader_object_is_addressed)
     submitExpect(s.mutated(kShaderObjLo, 0xdeadbee0u), true);  // no buffer there
 }
 
+TEST(a5xx_dispatch_state_loads)
+{
+    // constants, a buffer-backed constant load, UBO pointers and device-buffer state, then the dispatch.
+    Stream s;
+    std::vector<uint32_t> head(s.words.begin(), s.words.begin() + 15);  // everything before SP_CS_OBJ_START
+    std::vector<uint32_t> tail(s.words.begin() + 15, s.words.end());
+    std::vector<uint32_t> full = head;
+    std::vector<uint32_t> consts = {1, 2, 3, 4, 5, 6, 7, 8};
+    hakios::metal::a5xx::loadConstantsDirect(full, 0, consts.data(), 8);
+    hakios::metal::a5xx::loadConstantsBuffer(full, 64, 0xb0000000ull, 256, 8);
+    uint64_t ubos[2] = {0xb0000000ull, 0xb0010000ull};
+    hakios::metal::a5xx::loadUboPointers(full, 128, ubos, 2);
+    uint64_t addrs[2] = {0xb0000000ull, 0xb0020000ull};
+    uint64_t sizes[2] = {4096, 8192};
+    hakios::metal::a5xx::loadSsbos(full, addrs, sizes, 2);
+    full.insert(full.end(), tail.begin(), tail.end());
+
+    FakeGpu5 gpu;
+    gpu.attach(0xa0000000ull, 0x100000ull);
+    gpu.attach(0xb0000000ull, 0x100000ull);
+    gpu.submit(full);
+    if (gpu.faults() != 0) {
+        for (const char *why : gpu.sentences()) {
+            std::fprintf(stderr, "  fault: %s\n", why);
+        }
+    }
+    CHECK_EQ(gpu.faults(), 0u);
+
+    // a direct constants load whose NUM_UNIT disagrees with its word count
+    std::vector<uint32_t> bad = full;
+    bad[16] = hakios::metal::a5xx::loadState4Word0(0, hakios::metal::a5xx::kSrcDirect,
+        hakios::metal::a5xx::kBlockCsShader, 50);
+    FakeGpu5 gpu2;
+    gpu2.attach(0xa0000000ull, 0x100000ull);
+    gpu2.attach(0xb0000000ull, 0x100000ull);
+    gpu2.submit(bad);
+    CHECK(gpu2.faults() != 0);
+}
+
 TEST(a5xx_dispatch_grid_consistency)
 {
     Stream s;

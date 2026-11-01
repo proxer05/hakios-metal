@@ -67,7 +67,11 @@ public:
                 uint32_t w0 = words[body];
                 uint32_t numUnit = (w0 >> 22) & 0x3ffu;
                 uint32_t src = (w0 >> 16) & 3u;
-                if (src == kSrcDirect && h.count != 3 + numUnit * 4) {
+                uint32_t block = (w0 >> 18) & 0xfu;
+                /* constants and UBO-pointer tables count vec4 units (four words); the SSBO
+                 * state counts two-word entries (fd5_emit_ssbos writes two words per buffer) */
+                uint32_t unitWords = block == kBlockCsSsbo ? 2u : 4u;
+                if (src == kSrcDirect && h.count != 3 + numUnit * unitWords) {
                     fault(i, "a direct state load whose count does not match NUM_UNIT");
                     return;
                 }
