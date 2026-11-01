@@ -2,11 +2,10 @@
  * MSM8953 / Adreno 506 (A5xx) registers, packets and descriptors, under
  * Mesa's names, each value the offset in Mesa's a5xx.xml (checked by
  * tools/check-a5xx.py). The names are gathered mechanically from Mesa's
- * fd5 driver sources (compute, emit, draw, gmem, program, blend,
- * rasterizer, zsa, texture); UNKNOWN_* names from the sources have no XML
- * entry and are left out. The kgsl a5xx_reg.h of the pinned daisy-o-oss
- * kernel is the second witness. Not Cobalt GPUCC/Fabia and not the
- * A642L's a6xx.hpp.
+ * fd5 driver sources; array registers are A5XX_<ARRAY>(i); UNKNOWN_* names
+ * from the sources have no XML entry and are left out. The kgsl a5xx_reg.h
+ * of the pinned daisy-o-oss kernel is the second witness. Not Cobalt
+ * GPUCC/Fabia and not the A642L's a6xx.hpp.
  */
 #pragma once
 
@@ -155,5 +154,9 @@ static constexpr uint32_t A5XX_VPC_SO_OVERRIDE = 0x0e2a2u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_SO_PROG = 0x0e2a4u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VSC_BIN_SIZE = 0x00bc2u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VSC_RESOLVE_CNTL = 0x00cddu;  /* a5xx.xml */
+static inline constexpr uint32_t A5XX_RB_MRT_FLAG_BUFFER(unsigned i) { return 0x0e243u + 0x4u * i; }  /* a5xx.xml array */
+static inline constexpr uint32_t A5XX_VFD_DECODE(unsigned i) { return 0x0e48au + 0x2u * i; }  /* a5xx.xml array */
+static inline constexpr uint32_t A5XX_VFD_DEST_CNTL(unsigned i) { return 0x0e4cau + 0x1u * i; }  /* a5xx.xml array */
+static inline constexpr uint32_t A5XX_VFD_FETCH(unsigned i) { return 0x0e40au + 0x4u * i; }  /* a5xx.xml array */
 
 }  // namespace a5xx
