@@ -163,6 +163,10 @@ struct Kernel {
     // program was uploaded (render.cpp: pushedRanges, uboDescriptors). Plus one so that a fixture written before the
     // field, which leaves it zero, says none.
     uint32_t constantDataUbo;
+    // the UBO pointer table's vec4 offset (ir3_const_allocations' UBO_PTRS; an a5xx fact: a6xx loads UBO state
+    // and ldc's through it, an a5xx ldc's pointer pairs) — last, so the checked-in fixtures' initializer lists
+    // end before it and the regeneration of one needs no struct change
+    int32_t uboPtrsOffsetVec4;
 };
 
 } // namespace hakios::metal

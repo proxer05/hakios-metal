@@ -26,6 +26,7 @@ enum Opcode : uint8_t {
     kIndirectBuffer = 0x3f,   // CP_INDIRECT_BUFFER: address (2 words), size in words
     kMemToMem = 0x73,         // CP_MEM_TO_MEM
     kMemcpy = 0x75,           // CP_MEMCPY (A6xx and later): words, source (2 words), destination (2 words)
+    kEventWrite = 0x46,       // CP_EVENT_WRITE: an event, then the address a timestamp or value goes to
 };
 
 // odd parity of the low 32 bits: 1 when the number of ones is even, so that the field and its bit have an odd count

@@ -41,32 +41,31 @@ constexpr uint32_t loadState4Word1(uint32_t stateType, uint32_t extAddrLow) {
     return ((stateType & 3u) << 0) | ((extAddrLow >> 2) << 2);
 }
 
-// Constants straight from the stream (fd5_emit_const_user): 3 header words, then the values.
+// Constants straight from the stream (fd5_emit_const_user): a 3-word header, then the values.
 inline void
 loadConstantsDirect(std::vector<uint32_t> &out, uint32_t regid, const uint32_t *dwords, uint32_t sizedwords)
 {
-    out.push_back(type7(kLoadState4, 3 + sizedwords));
-    out.push_back(loadState4Word0(regid / 4, kSrcDirect, kBlockCsShader, sizedwords / 4));
-    out.push_back(loadState4Word1(kStateConstants, 0));
-    out.push_back(0);                                   // EXT_SRC_ADDR_HI
+    std::vector<uint32_t> w;
+    w.push_back(loadState4Word0(regid / 4, kSrcDirect, kBlockCsShader, sizedwords / 4));
+    w.push_back(loadState4Word1(kStateConstants, 0));
+    w.push_back(0);                                     // EXT_SRC_ADDR_HI
     for (uint32_t i = 0; i < sizedwords; i++) {
-        out.push_back(dwords[i]);
+        w.push_back(dwords[i]);
     }
 }
 
-// Constants from a buffer (fd5_emit_const_bo): 3 header words, the buffer's address in words 1/2
-// (EXT_SRC_ADDR carries the byte offset, shifted; the STATE_TYPE rides bits 0-1 of word 1).
+// Constants from a buffer (fd5_emit_const_bo): a 3-word header naming the buffer's address (the byte
+// offset rides EXT_SRC_ADDR, the STATE_TYPE its bits 0-1).
 inline void
 loadConstantsBuffer(std::vector<uint32_t> &out, uint32_t regid, uint64_t bufferAddress, uint32_t byteOffset,
                     uint32_t sizedwords)
 {
-    uint32_t dstOff = regid / 4;
-    uint32_t numUnit = sizedwords / 4;
     uint64_t address = bufferAddress + byteOffset;
-    out.push_back(type7(kLoadState4, 3));
-    out.push_back(loadState4Word0(dstOff, kSrcIndirect, kBlockCsShader, numUnit));
-    out.push_back(loadState4Word1(kStateConstants, static_cast<uint32_t>(address)));
-    out.push_back(static_cast<uint32_t>(address >> 32));
+    std::vector<uint32_t> w;
+    w.push_back(type7(kLoadState4, 3));
+    w.push_back(loadState4Word0(regid / 4, kSrcIndirect, kBlockCsShader, sizedwords / 4));
+    w.push_back(loadState4Word1(kStateConstants, static_cast<uint32_t>(address)));
+    w.push_back(static_cast<uint32_t>(address >> 32));
 }
 
 // The UBO pointer table (fd5_emit.c's fd5_emit_const_ptrs): a direct load whose data is an address pair
@@ -76,14 +75,14 @@ inline void
 loadUboPointers(std::vector<uint32_t> &out, uint32_t regid, const uint64_t *addresses, uint32_t num)
 {
     uint32_t anum = (num + 1u) & ~1u;
-    out.push_back(type7(kLoadState4, 3 + 2 * anum));
-    out.push_back(loadState4Word0(regid / 4, kSrcDirect, kBlockCsShader, anum / 2));
-    out.push_back(loadState4Word1(kStateConstants, 0));
-    out.push_back(0);
+    std::vector<uint32_t> w;
+    w.push_back(loadState4Word0(regid / 4, kSrcDirect, kBlockCsShader, anum / 2));
+    w.push_back(loadState4Word1(kStateConstants, 0));
+    w.push_back(0);
     for (uint32_t i = 0; i < anum; i++) {
         uint64_t a = i < num ? addresses[i] : 0;
-        out.push_back(static_cast<uint32_t>(a));
-        out.push_back(static_cast<uint32_t>(a >> 32));
+        w.push_back(static_cast<uint32_t>(a));
+        w.push_back(static_cast<uint32_t>(a >> 32));
     }
 }
 
@@ -94,23 +93,23 @@ loadUboPointers(std::vector<uint32_t> &out, uint32_t regid, const uint64_t *addr
 inline void
 loadSsbos(std::vector<uint32_t> &out, const uint64_t *addresses, const uint64_t *sizes, uint32_t count)
 {
-    out.push_back(type7(kLoadState4, 3 + 2 * count));
-    out.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
-    out.push_back(loadState4Word1(kStateConstants, 0));
-    out.push_back(0);
+    std::vector<uint32_t> w;
+    w.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
+    w.push_back(loadState4Word1(kStateConstants, 0));
+    w.push_back(0);
     for (uint32_t i = 0; i < count; i++) {
         uint64_t sz = sizes[i];
-        out.push_back((sz & 0xffffu) << 16);            // SSBO_1_0: FMT 0 << 8 | WIDTH
-        out.push_back(static_cast<uint32_t>(sz >> 16)); // SSBO_1_1: HEIGHT | DEPTH << 16
+        w.push_back((sz & 0xffffu) << 16);              // SSBO_1_0: FMT 0 << 8 | WIDTH
+        w.push_back(static_cast<uint32_t>(sz >> 16));   // SSBO_1_1: HEIGHT | DEPTH << 16
     }
 
-    out.push_back(type7(kLoadState4, 3 + 2 * count));
-    out.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
-    out.push_back(loadState4Word1(kStateUbo, 0));
-    out.push_back(0);
+    w.clear();
+    w.push_back(loadState4Word0(0, kSrcDirect, kBlockCsSsbo, count));
+    w.push_back(loadState4Word1(kStateUbo, 0));
+    w.push_back(0);
     for (uint32_t i = 0; i < count; i++) {
-        out.push_back(static_cast<uint32_t>(addresses[i]));
-        out.push_back(static_cast<uint32_t>(addresses[i] >> 32));
+        w.push_back(static_cast<uint32_t>(addresses[i]));
+        w.push_back(static_cast<uint32_t>(addresses[i] >> 32));
     }
 }
 
