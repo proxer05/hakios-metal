@@ -11,7 +11,7 @@
 
 #include "pm4.hpp"
 
-namespace a5xx {
+namespace hakios::metal::a5xx {
 
 
 static constexpr uint32_t A5XX_GRAS_2D_BLIT_CNTL = 0x02180u;  /* a5xx.xml */
@@ -85,6 +85,9 @@ static constexpr uint32_t A5XX_RB_DEPTH_PLANE_CNTL = 0x0e1b0u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_DEST_MSAA_CNTL = 0x0e143u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_FS_OUTPUT_CNTL = 0x0e146u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_MODE_CNTL = 0x00cc6u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_RB_MRT_BLEND_CONTROL = 0x0e151u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_RB_MRT_BUF_INFO = 0x0e152u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_RB_MRT_CONTROL = 0x0e150u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_RAS_MSAA_CNTL = 0x0e142u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_RENDER_CNTL = 0x0e141u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_RB_RENDER_COMPONENTS = 0x0e147u;  /* a5xx.xml */
@@ -102,8 +105,10 @@ static constexpr uint32_t A5XX_SP_CS_OBJ_START_LO = 0x0e5f3u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_DBG_ECO_CNTL = 0x00ec0u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_FS_CONFIG_MAX_CONST = 0x0e58bu;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_FS_CTRL_REG0 = 0x0e5c0u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_SP_FS_MRT_REG = 0x0e5d3u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_FS_OBJ_START_LO = 0x0e5c3u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_FS_OUTPUT_CNTL = 0x0e5cau;  /* a5xx.xml */
+static constexpr uint32_t A5XX_SP_FS_OUTPUT_REG = 0x0e5cbu;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_GS_CTRL_REG0 = 0x0e640u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_HS_CTRL_REG0 = 0x0e600u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_MODE_CNTL = 0x00ec2u;  /* a5xx.xml */
@@ -113,6 +118,8 @@ static constexpr uint32_t A5XX_SP_VS_CONFIG = 0x0e584u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_VS_CONFIG_MAX_CONST = 0x0e58au;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_VS_CTRL_REG0 = 0x0e590u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_SP_VS_OBJ_START_LO = 0x0e5acu;  /* a5xx.xml */
+static constexpr uint32_t A5XX_SP_VS_OUT_REG = 0x0e593u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_SP_VS_VPC_DST_REG = 0x0e5a3u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_TPL1_CS_TEX_COUNT = 0x0e751u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_TPL1_DS_TEX_COUNT = 0x0e702u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_TPL1_FS_TEX_COUNT = 0x0e750u;  /* a5xx.xml */
@@ -148,15 +155,25 @@ static constexpr uint32_t A5XX_VPC_FS_PRIMITIVEID_CNTL = 0x0e2a0u;  /* a5xx.xml 
 static constexpr uint32_t A5XX_VPC_GS_SIV_CNTL = 0x0e298u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_MODE_CNTL = 0x00e62u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_PACK = 0x0e29du;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_SO_BUFFER_BASE_LO = 0x0e2a7u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_SO_BUFFER_OFFSET = 0x0e2abu;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_SO_BUF_CNTL = 0x0e2a1u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_SO_CNTL = 0x0e2a3u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_SO_FLUSH_BASE_LO = 0x0e2acu;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_SO_NCOMP = 0x0e2aau;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_SO_OVERRIDE = 0x0e2a2u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VPC_SO_PROG = 0x0e2a4u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_VARYING_INTERP_MODE = 0x0e282u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_VARYING_PS_REPL_MODE = 0x0e28au;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VPC_VAR_DISABLE = 0x0e294u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VSC_BIN_SIZE = 0x00bc2u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VSC_PIPE_CONFIG_REG = 0x00bd0u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VSC_PIPE_DATA_ADDRESS_LO = 0x00be0u;  /* a5xx.xml */
+static constexpr uint32_t A5XX_VSC_PIPE_DATA_LENGTH_REG = 0x00c00u;  /* a5xx.xml */
 static constexpr uint32_t A5XX_VSC_RESOLVE_CNTL = 0x00cddu;  /* a5xx.xml */
 static inline constexpr uint32_t A5XX_RB_MRT_FLAG_BUFFER(unsigned i) { return 0x0e243u + 0x4u * i; }  /* a5xx.xml array */
 static inline constexpr uint32_t A5XX_VFD_DECODE(unsigned i) { return 0x0e48au + 0x2u * i; }  /* a5xx.xml array */
 static inline constexpr uint32_t A5XX_VFD_DEST_CNTL(unsigned i) { return 0x0e4cau + 0x1u * i; }  /* a5xx.xml array */
 static inline constexpr uint32_t A5XX_VFD_FETCH(unsigned i) { return 0x0e40au + 0x4u * i; }  /* a5xx.xml array */
 
-}  // namespace a5xx
+}  // namespace hakios::metal::a5xx

@@ -39,6 +39,12 @@ for el in root.iter():
         regs.setdefault(name, int(off, 0))
     elif tag == 'array':
         arrays.setdefault(name, (int(off, 0), int(el.get('stride', '1'), 0)))
+        for nested in el.iter():
+            ntag = nested.tag.split('}')[-1]
+            if ntag in ('reg32', 'reg64'):
+                nname, noff = nested.get('name', ''), nested.get('offset')
+                if nname and noff is not None:
+                    regs.setdefault(f'{name}_{nname}', int(off, 0) + int(noff, 0))
 
 names = set()
 for src in SOURCES:
@@ -62,7 +68,7 @@ lines = ['''/*
 
 #include "pm4.hpp"
 
-namespace a5xx {
+namespace hakios::metal::a5xx {
 
 ''']
 for n in known:
@@ -70,7 +76,7 @@ for n in known:
 for n in arrays_needed:
     base, stride = arrays[n]
     lines.append(f'static inline constexpr uint32_t A5XX_{n}(unsigned i) {{ return 0x{base:05x}u + 0x{stride:x}u * i; }}  /* a5xx.xml array */')
-lines.append('\n}  // namespace a5xx\n')
+lines.append('\n}  // namespace hakios::metal::a5xx\n')
 
 OUT.write_text('\n'.join(lines))
 print(f'wrote {OUT}: {len(known)} registers, {len(arrays_needed)} arrays '
