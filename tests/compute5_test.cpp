@@ -47,7 +47,7 @@ TEST(compute5_dispatch_words)
     d.csCtrl0.halfRegFootprint = 3;
     d.csCtrl0.fullRegFootprint = 5;
     d.csCtrl0.branchstack = 2;
-    d.shaderObj = 0xa0000000ull;
+    d.obj.shaderAddress = 0xa0000000ull;
     d.ndrange.localX = 64;
     d.ndrange.localY = 64;
     d.ndrange.localZ = 64;
@@ -57,7 +57,7 @@ TEST(compute5_dispatch_words)
 
     std::vector<uint32_t> w;
     d.emit(w);
-    CHECK_EQ(w.size(), 40u);
+    CHECK_EQ(w.size(), 44u);
 
     // The anchor literal: SP_SP_CNTL (0xe580), count 1, count-parity 0 (odd count), register parity 1
     // (0xe580 has six ones): 0x40000000 | 0x08000000 | 0x00e58000 | 1.
@@ -79,9 +79,13 @@ TEST(compute5_dispatch_words)
     c.reg4(0x0e7dcu, 2, "HLSQ_CS_CONSTLEN");
     c.val(1u, "HLSQ_CS_CONSTLEN value");
     c.val(0u, "HLSQ_CS_INSTRLEN value");
-    c.reg4(0x0e5f3u, 2, "SP_CS_OBJ_START_LO");
+    c.reg4(0x0e5f3u, 6, "SP_CS_OBJ_START_LO");
     c.val(0xa0000000u, "SP_CS_OBJ_START_LO value");
     c.val(0, "SP_CS_OBJ_START_HI value");
+    c.val(0, "SP_CS_PVT_MEM_PARAM value");
+    c.val(0, "SP_CS_PVT_MEM_ADDR_LO value");
+    c.val(0, "SP_CS_PVT_MEM_ADDR_HI value");
+    c.val(0, "SP_CS_PVT_MEM_SIZE value");
     c.reg4(0x0e78au, 1, "HLSQ_UPDATE_CNTL");
     c.val(0x1f00000u, "HLSQ_UPDATE_CNTL value");
     c.reg4(0x0e7b7u, 2, "HLSQ_CS_CNTL_0");

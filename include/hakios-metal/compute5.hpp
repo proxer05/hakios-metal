@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "a5xx.hpp"
+#include "loadstate5.hpp"
 #include "pm4.hpp"
 
 namespace hakios::metal::a5xx {
@@ -68,8 +69,6 @@ struct SpCsCtrlReg0 {
 
 // --- a5xx_xs_config (SP_CS_CONFIG / HLSQ_CS_CONFIG): ENABLED pos 0, CONSTOBJECTOFFSET 1-7, SHADEROBJOFFSET 8-14 -----
 struct CsConfig {
-    uint16_t instrlen = 0;          // 32*16-instruction units; 0 disables the preload
-
     static constexpr uint32_t kEnabled = 1u << 0;
 
     uint32_t config() const { return kEnabled; }   // CONSTOBJECTOFFSET(0) | SHADEROBJOFFSET(0) | ENABLED
@@ -136,11 +135,11 @@ struct Dispatch {
     HlsqControl0 control0;
     SpCsCtrlReg0 csCtrl0;
     CsConfig     config;
-    CsCntl       cntl;
+    CsCntl       cntl;              // instrlen lives here, once
     uint16_t     constlen = 0;    // v->constlen / 4 (128-bit units; fd5 asserts a multiple of 4)
     CsCntl01     cntl01;
     NdRange      ndrange;
-    uint64_t     shaderObj = 0;   // the SP_CS_OBJ_START address
+    ShaderObj    obj;             // the shader address and its private memory
 
     void emit(std::vector<uint32_t> &out) const {
         auto w4 = [&](uint32_t reg, std::initializer_list<uint32_t> words) {
@@ -157,9 +156,8 @@ struct Dispatch {
         w4(A5XX_HLSQ_CS_CNTL, {cntl.words()});
         w4(A5XX_SP_CS_CONFIG, {config.config()});
         w4(A5XX_HLSQ_CS_CONSTLEN, {static_cast<uint32_t>(constlen),
-                                         static_cast<uint32_t>(config.instrlen)});
-        w4(A5XX_SP_CS_OBJ_START_LO, {static_cast<uint32_t>(shaderObj),
-                                           static_cast<uint32_t>(shaderObj >> 32)});
+                                         static_cast<uint32_t>(cntl.instrlen)});
+        obj.emit(out);
         w4(A5XX_HLSQ_UPDATE_CNTL, {0x1f00000u});
         w4(A5XX_HLSQ_CS_CNTL_0, {cntl01.cntl0(), cntl01.cntl1()});
         uint32_t nd[7];

@@ -57,6 +57,24 @@ public:
                 }
             } else if (h.opcode == static_cast<uint32_t>(pm4::Opcode::kNop)) {
                 ;                                        // the words that follow are skipped
+            } else if (h.opcode == static_cast<uint32_t>(kLoadState4)) {
+                /* fd5_emit_const_user/bo: word 0 names the block, source and units; a direct load carries
+                 * NUM_UNIT*4 more words, an indirect one names a buffer in words 1/2. */
+                if (h.count < 3) {
+                    fault(i, "a CP_LOAD_STATE4 shorter than its header");
+                    return;
+                }
+                uint32_t w0 = words[body];
+                uint32_t numUnit = (w0 >> 22) & 0x3ffu;
+                uint32_t src = (w0 >> 16) & 3u;
+                if (src == kSrcDirect && h.count != 3 + numUnit * 4) {
+                    fault(i, "a direct state load whose count does not match NUM_UNIT");
+                    return;
+                }
+                if (src != kSrcDirect && src != kSrcIndirect) {
+                    fault(i, "a state load from a source this GPU does not know");
+                    return;
+                }
             } else if (h.opcode == static_cast<uint32_t>(kExecCs)) {
                 if (h.count != 4) {
                     fault(i, "a CP_EXEC_CS that is not four words");

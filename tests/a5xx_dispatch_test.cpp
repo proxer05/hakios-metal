@@ -23,7 +23,7 @@ struct Stream {
         d.csCtrl0.halfRegFootprint = 3;
         d.csCtrl0.fullRegFootprint = 5;
         d.csCtrl0.branchstack = 2;
-        d.shaderObj = 0xa0000000ull;
+        d.obj.shaderAddress = 0xa0000000ull;
         d.ndrange.localX = 64;
         d.ndrange.localY = 64;
         d.ndrange.localZ = 64;
@@ -50,11 +50,11 @@ enum Word {
     kHlsqCsConstlen = 13,
     kHlsqCsInstrlen = 14,
     kShaderObjLo = 16,
-    kKernelGroupX = 32,
-    kKernelGroupY = 33,
-    kKernelGroupZ = 34,
-    kExecCs = 35,
-    kNgroupsX = 37,
+    kKernelGroupX = 36,
+    kKernelGroupY = 37,
+    kKernelGroupZ = 38,
+    kExecCs = 39,
+    kNgroupsX = 41,
 };
 
 }  // namespace
