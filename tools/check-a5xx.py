@@ -29,6 +29,12 @@ for el in root.iter():
         regs.setdefault(name, int(off, 0))
     elif tag == 'array':
         arrays.setdefault(name, (int(off, 0), int(el.get('stride', '1'), 0)))
+        for nested in el.iter():
+            ntag = nested.tag.split('}')[-1]
+            if ntag in ('reg32', 'reg64'):
+                nname, noff = nested.get('name', ''), nested.get('offset')
+                if nname and noff is not None:
+                    regs.setdefault(f'{name}_{nname}', int(off, 0) + int(noff, 0))
 
 fail = 0
 n = 0
