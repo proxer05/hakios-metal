@@ -141,6 +141,16 @@ hakios_metal_kernel* hakios_metal_kernel_compile_bitcode(const void* bitcode, si
     return hakios_metal_kernel_compile_bitcode_constants(bitcode, size, nullptr, 0);
 }
 
+hakios_metal_kernel* hakios_metal_kernel_compile_bitcode_on_device(hakios_metal_device* d, const void* bitcode, size_t size) {
+    if (d == nullptr) { failed("no device for the compiler target"); return nullptr; }
+    std::string why;
+    auto k = compileAir(bitcode, size, &why, {}, d->gpu->chipId());
+    if (k == nullptr) { failed(why); return nullptr; }
+    auto* r = new hakios_metal_kernel;
+    r->kernel = std::move(k);
+    return r;
+}
+
 hakios_metal_kernel* hakios_metal_kernel_compile_bitcode_constants(const void* bitcode, size_t size, const hakios_metal_constant* constants, unsigned count) {
     std::string why;
     std::unique_ptr<CompiledKernel> k = compileAir(bitcode, size, &why, constantsOf(constants, count));

@@ -3,8 +3,10 @@
 
 Register names are gathered mechanically from Mesa's fd5 driver sources
 (compute, emit, draw, gmem, program, blend, rasterizer, zsa, texture,
-blitter, format): every REG_A5XX_<name> they reference, under Mesa's name,
-at the a5xx.xml offset. rnndb arrays become A5XX_<ARRAY>(i) = base + stride*i.
+blitter, format): every A5XX_<name> they reference, with or without the
+REG_ prefix, under Mesa's name, at the a5xx.xml offset. Field macros
+(A5XX_<reg>_<field>) are not register names and are dropped by the XML
+lookup. rnndb arrays become A5XX_<ARRAY>(i) = base + stride*i.
 tools/check-a5xx.py re-verifies the checked-in header against the XML.
 
 Run from the hakios-metal tree:  python3 tools/gen-a5xx.py
@@ -23,7 +25,7 @@ XML = MESA / 'src/freedreno/registers/adreno/a5xx.xml'
 FD5 = MESA / 'src/gallium/drivers/freedreno/a5xx'
 OUT = ROOT / 'include/hakios-metal/a5xx.hpp'
 
-SOURCES = ['fd5_compute.c', 'fd5_emit.c', 'fd5_draw.c', 'fd5_gmem.c',
+SOURCES = ['fd5_compute.c', 'fd5_emit.c', 'fd5_emit.h', 'fd5_draw.c', 'fd5_gmem.c',
            'fd5_program.c', 'fd5_blend.c', 'fd5_rasterizer.c', 'fd5_zsa.c',
            'fd5_texture.c', 'fd5_blitter.c', 'fd5_format.c']
 
@@ -46,10 +48,23 @@ for el in root.iter():
                 if nname and noff is not None:
                     regs.setdefault(f'{name}_{nname}', int(off, 0) + int(noff, 0))
 
-names = set()
+tokens = set()
 for src in SOURCES:
     text = (Path(FD5) / src).read_text()
-    names |= set(re.findall(r'REG_A5XX_([A-Z0-9_]+)', text))
+    tokens |= set(re.findall(r'\b(?:REG_)?A5XX_([A-Z0-9_]+)', text))
+
+# A field macro (A5XX_RB_MRT_BUF_INFO_COLOR_FORMAT) starts with its register
+# name, and some registers are only ever named as such a prefix (for example
+# the DEST_MSAA_CNTL regs, whose fields fd5_gmem.c sets directly). Fold every
+# token prefix that the XML knows back into a register/array reference.
+names = set()
+for t in tokens:
+    parts = t.split('_')
+    for i in range(len(parts), 0, -1):
+        p = '_'.join(parts[:i])
+        if p in regs or p in arrays:
+            names.add(p)
+            break
 
 known = sorted(n for n in names if n in regs)
 arrays_needed = sorted(n for n in names if n not in regs and n in arrays)

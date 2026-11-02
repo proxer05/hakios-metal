@@ -14,6 +14,7 @@
 #include <tuple>
 
 #include "hakios-metal/a6xx.hpp"
+#include "hakios-metal/render5.hpp"
 #include "hakios-metal/command.hpp"
 #include "hakios-metal/texture.hpp"
 
@@ -2765,6 +2766,27 @@ bool CommandBuffer::draw(const Program& program, const RenderPass& pass, const D
                          const render::Options& options) {
     if (status_ > kEnqueued) {
         return fail("draw after commit");
+    }
+    const uint32_t chip = queue_.gpu().chipId();
+    for (const Kernel* k : {&program.vs.k, &program.fs.k})
+        if (k->chipId && k->chipId != chip) return refuseWork("render program compiled for a different GPU chip");
+    if ((chip >> 24) == 5) {
+        std::string why;
+        const uint64_t va = programAddress(program.vs.k, &why), fa = programAddress(program.fs.k, &why);
+        Piece table;
+        if (!va || !fa || !piece(render::kTableBytes, &table, &why)) return fail("A506 draw allocation: " + why);
+        memset(table.contents(), 0, 16);
+        pm4::Stream draw;
+        if (!render5::encode(draw, program, pass, d, vsBindings, fsBindings, va, fa, table.gpuAddress(), &why)) return refuseWork(why);
+        closePass();
+        appendStream(stream_, draw);
+        useAttachments(pass);
+        for (const Bindings* b : {&vsBindings, &fsBindings}) {
+            for (const auto& x : b->buffers) if (x.buffer) use(*x.buffer, false);
+            for (const auto* t : b->textures) if (t) { use(*t->buffer(), false); keep(t->buffer()); }
+        }
+        ++counts_.draws;
+        return true;
     }
     // A compressed texture whose rows this processor changed since the GPU last copied them in (Texture::staging): the
     // copy first, by the 2D engine into the UBWC layout, in a pass of its own before this draw's

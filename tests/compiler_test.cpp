@@ -16,6 +16,8 @@
 #include "fixtures/argbuf_res_air.hpp"
 #include "hakios-metal/hakios_metal.h"
 #include "fixtures/fill_id_air.hpp"
+#include "fixtures/fill_id_bc.hpp"
+#include "hakios-metal/a5xx.hpp"
 #include "fixtures/tex_copy_air.hpp"
 #include "fixtures/tex_fill_air.hpp"
 #include "fixtures/tex_size_h_air.hpp"
@@ -40,6 +42,58 @@
 #include "test.hpp"
 
 using namespace hakios::metal;
+
+TEST(compiler_a506_target_is_not_the_a6xx_default) {
+    if (!hasCompiler()) return;
+    const auto& bc = kernels::fill_id_bc;
+    std::string why;
+    auto a5 = compileAir(bc, sizeof(bc), &why, {}, 0x05000600);
+    CHECK(a5 != nullptr);
+    if (!a5) { fprintf(stderr, "A506 compile: %s\n", why.c_str()); return; }
+    auto a6 = compileAir(bc, sizeof(bc), &why);
+    CHECK(a6 != nullptr);
+    if (!a6) return;
+    CHECK_EQ(a5->kernel.chipId, 0x05000600u);
+    CHECK_EQ(a6->kernel.chipId, 0x06030500u);
+    CHECK(!a5->kernel.mergedRegs);
+    CHECK(a6->kernel.mergedRegs);
+    CHECK(a5->words != a6->words);
+
+    Gpu gpu(std::make_unique<FakeGpu>());
+    auto out = newBuffer(gpu, 64, &why), constants = newBuffer(gpu, 16, &why);
+    auto program = newBuffer(gpu, a5->words.size() * 4, &why);
+    auto table = newBuffer(gpu, compute::kTableBytes, &why);
+    CHECK(out && constants && program && table);
+    if (!out || !constants || !program || !table) return;
+    memset(constants->contents(), 0, 16);
+    const uint32_t groups[3] = {4, 1, 1};
+    const uint32_t local[3] = {1, 1, 1};
+    compute::Options options;
+    options.a5xx = true;
+    pm4::Stream stream;
+    CHECK(compute::encode(stream, a5->kernel, groups, local,
+        std::vector<Binding>{{out.get(), 0}, {constants.get(), 0}}, nullptr,
+        program->gpuAddress(), table->gpuAddress(), static_cast<uint8_t*>(table->contents()), &why, options));
+    if (stream.words().empty()) { fprintf(stderr, "A506 encode: %s\n", why.c_str()); return; }
+    bool cs = false, sysvals = false, constlen = false, flush = false;
+    const auto& w = stream.words();
+    for (size_t i = 0; i < w.size();) {
+        auto h = pm4::decode(w[i]);
+        CHECK(h.kind != pm4::Header::kBad && i + h.count < w.size());
+        if (h.kind == pm4::Header::kRegisters && h.reg == a5xx::A5XX_HLSQ_CS_CNTL_0) {
+            sysvals = true;
+            CHECK_EQ(w[i+1] & 0x00ffff00u, 0x00fcfc00u);
+        }
+        if (h.kind == pm4::Header::kRegisters && h.reg == a5xx::A5XX_HLSQ_CS_CONSTLEN) {
+            constlen = true;
+            CHECK_EQ(w[i+1], (a5->kernel.constlen + 3) / 4);
+        }
+        if (h.kind != pm4::Header::kRegisters && h.opcode == 0x33) { cs = true; CHECK_EQ(w[i+2], 4u); }
+        if (h.kind != pm4::Header::kRegisters && h.opcode == 0x46) { flush = true; CHECK_EQ(w[i+1], 4u); }
+        i += h.count + 1;
+    }
+    CHECK(cs && sysvals && constlen && flush);
+}
 
 namespace {
 // the bitcode llvm-as made of tools/kernels/NAME.ll (tools/kernels.mk: out/host/kernels/NAME.bc), when it is there

@@ -115,7 +115,7 @@ uint32_t a5SpCsCtrl(const Kernel& k, bool preload) {
     // bitset a5xx_sp_xs_ctrl_reg0: BUFFER pos 2, THREADSIZE pos 3, HALF 4-9, FULL 10-15, BRANCHSTACK 25-31
     uint32_t v = 0x2u;                       // fd5's constant (bit 1)
     if (preload) v |= 1u << 2;               // BUFFER: the shader fits and is preloaded
-    v |= 0u << 3;                            // THREADSIZE: TWO_QUADS, 64 threads
+    v |= uint32_t(k.doubleThreadsize) << 3;
     v |= uint32_t(k.maxHalfReg + 1) << 4;    // -1 + 1 = 0 when none
     v |= uint32_t(k.maxReg + 1) << 10;
     v |= (k.branchstackHw & 0x7fu) << 25;
@@ -137,7 +137,7 @@ void a5ShaderObj(pm4::Stream& stream, uint64_t program, const PrivateMemory& pm)
 
 // HLSQ_CS_CNTL_0: WGIDCONSTID 0-7, UNK0 8-15, UNK1 16-23, LOCALIDREGID 24-31; regid(63,0) = not used
 uint32_t a5CsCntl0(uint16_t workGroupId, uint16_t localId) {
-    return workGroupId | (0x3f00u << 8) | (0x3f00u << 16) | (uint32_t(localId) << 24);
+    return workGroupId | 0x00fcfc00u | (uint32_t(localId) << 24);
 }
 
 // HLSQ_CS_NDRANGE_0..6: KERNELDIM 0-1, LOCALSIZEX 2-11, Y 12-21, Z 22-31; GLOBALSIZE/OFF whole words
@@ -204,8 +204,12 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
     if (k.pvtmemSize != 0) {
         return refuse(why, std::string(k.name) + " spills to private memory: the a5xx path serves kernels that fit their registers, for now");
     }
-    if (k.numTextureSlots != 0) {
-        return refuse(why, std::string(k.name) + " samples textures: the a5xx texture tables are the next slice, not served yet");
+    TextureTables5 textures;
+    if (!textureTables5(k, bindings, &textures, why)) return false;
+    if (uint64_t(local[0]) * local[1] * local[2] > kMaxLocalThreads) return refuse(why, "A5xx threadgroup exceeds the thread limit");
+    if (k.sharedSize) return refuse(why, "A5xx shared-memory kernels require local-memory state");
+    for (const auto& b : buffers) {
+        if (b.buffer && (b.offset >= b.buffer->length() || b.offset % 4)) return refuse(why, "A5xx buffer offset is outside its memory or unaligned");
     }
     for (uint32_t u = 0; u < k.numUbos; u++) {
         if (u >= buffers.size() || buffers[u].buffer == nullptr) {
@@ -250,7 +254,9 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
     }
     // struct ir3_driver_params_cs (Mesa ir3_shader.h) as the a6xx path fills it; the a5xx's subgroup is the
     // TWO_QUADS threadgroup's 64 threads
-    uint32_t params[16] = {groups[0], groups[1], groups[2], 3, 0, 0, 0, 64, local[0], local[1], local[2], 6, 0, 0, 0, 0};
+    const uint32_t subgroup = k.doubleThreadsize ? 128 : 64;
+    uint32_t params[16] = {groups[0], groups[1], groups[2], 3, 0, 0, 0, subgroup, local[0], local[1], local[2], k.doubleThreadsize ? 7u : 6u, 0, 0, 0, 0};
+    if (k.driverParamsOffsetVec4 >= 0 && uint32_t(k.driverParamsOffsetVec4) + 4 > k.constlen) return refuse(why, "A5xx driver parameters exceed constlen");
     std::vector<Range5> ranges;
     for (uint32_t i = 0; i < k.numUboRanges; i++) {
         const KernelUboRange& r = k.uboRanges[i];
@@ -269,6 +275,7 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
             return refuse(why, std::string(k.name) + ": no buffer bound at index " + n(r.block));
         }
         const Binding& x = buffers[r.block];
+        if (x.offset + 4ull * r.startDword + 4ull * r.sizeDwords > x.buffer->bo().size()) return refuse(why, "A5xx constant range exceeds mapped memory");
         if (r.sizeDwords == 0 || r.sizeDwords % 4 != 0) {
             return refuse(why, std::string(k.name) + ": a constant range of " + n(r.sizeDwords) + " dwords, not a whole number of vec4");
         }
@@ -287,25 +294,39 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
         ranges.push_back(Range5{r.offsetVec4, r.sizeDwords / 4, from, std::move(words)});
     }
 
+    const uint32_t nssbo = std::max(k.numBufs, k.numSsbos);
+    std::vector<uint64_t> addrs, sizes;
+    for (uint32_t i = 0; i < nssbo; ++i) {
+        if (i >= buffers.size() || !buffers[i].buffer) return refuse(why, "A5xx: missing SSBO " + n(i));
+        const auto& b = buffers[i];
+        const uint64_t bytes = b.buffer->length() - b.offset;
+        if (bytes > UINT32_MAX || (i < k.numBufs && bytes < k.bufs[i].sizeBytes)) return refuse(why, "A5xx: invalid SSBO size");
+        addrs.push_back(b.buffer->gpuAddress() + b.offset);
+        sizes.push_back(i < k.numBufs ? k.bufs[i].sizeBytes : bytes);
+    }
     // --- nothing is refused from here on: the stream, in fd5's order ---
+    stream.waitForIdle();
+    const uint32_t invalidate[5] = {0, 0, 0, 0, 0x12};
+    stream.registers(a5xx::A5XX_UCHE_CACHE_INVALIDATE_MIN_LO, invalidate, 5);
     reg(stream, a5xx::A5XX_SP_SP_CNTL, 0);
-    reg(stream, a5xx::A5XX_HLSQ_CONTROL_0_REG, a5HlsqControl0());
-    reg(stream, a5xx::A5XX_SP_CS_CTRL_REG0, a5SpCsCtrl(k, k.instrlen != 0));
+    const uint32_t preload = k.instrlen <= 32 ? k.instrlen : 0;
+    reg(stream, a5xx::A5XX_HLSQ_CONTROL_0_REG, a5HlsqControl0() | (uint32_t(k.doubleThreadsize) << 2));
+    reg(stream, a5xx::A5XX_SP_CS_CTRL_REG0, a5SpCsCtrl(k, preload != 0));
     reg(stream, a5xx::A5XX_HLSQ_CS_CONFIG, 1u);
-    reg(stream, a5xx::A5XX_HLSQ_CS_CNTL, a5HlsqCsCntl(k.instrlen, k.numSsbos != 0));
+    reg(stream, a5xx::A5XX_HLSQ_CS_CNTL, a5HlsqCsCntl(preload, k.numSsbos != 0));
     reg(stream, a5xx::A5XX_SP_CS_CONFIG, 1u);
     {
-        uint32_t v[2] = {k.constlen, k.instrlen};
+        uint32_t v[2] = {(k.constlen + 3) / 4, preload};
         stream.registers(a5xx::A5XX_HLSQ_CS_CONSTLEN, v, 2);
     }
     a5ShaderObj(stream, program, bindings.privateMemory);
     reg(stream, a5xx::A5XX_HLSQ_UPDATE_CNTL, 0x1f00000u);
-    a5ShaderPreload(stream, program, std::min<uint32_t>(k.instrlen, 127));
+    if (preload) a5ShaderPreload(stream, program, preload);
     {
         uint32_t v[2] = {a5CsCntl0(k.workGroupIdRegid, k.localIdRegid), 0x1u};
         stream.registers(a5xx::A5XX_HLSQ_CS_CNTL_0, v, 2);
     }
-    if (k.numUbos != 0) {
+    if (k.numUbos != 0 && k.uboPtrsOffsetVec4 >= 0) {
         std::vector<uint64_t> ubos;
         for (uint32_t u = 0; u < k.numUbos; u++) {
             if (k.constantDataUbo != 0 && u == k.constantDataUbo - 1) {
@@ -320,21 +341,7 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
         a5xx::loadUboPointers(w, uint32_t(k.uboPtrsOffsetVec4) * 4, ubos.data(), uint32_t(ubos.size()));
         stream.packet(uint32_t(a5xx::kLoadState4), w.data() + 1, uint32_t(w.size() - 1));
     }
-    uint32_t nssbo = std::max(k.numBufs, k.numSsbos);
     if (nssbo != 0) {
-        std::vector<uint64_t> addrs, sizes;
-        for (uint32_t i = 0; i < nssbo; i++) {
-            if (i >= buffers.size() || buffers[i].buffer == nullptr) {
-                return refuse(why, std::string(k.name) + ": no buffer bound at index " + n(i));
-            }
-            const Binding& b = buffers[i];
-            uint64_t bytes = b.buffer->length() - b.offset;
-            if (i < k.numBufs && bytes < k.bufs[i].sizeBytes) {
-                return refuse(why, std::string(k.name) + " declares buffer " + n(i) + " as " + n(k.bufs[i].sizeBytes) + " bytes; " + n(bytes) + " are bound");
-            }
-            addrs.push_back(b.buffer->gpuAddress() + b.offset);
-            sizes.push_back(i < k.numBufs ? k.bufs[i].sizeBytes : bytes);
-        }
         std::vector<uint32_t> w;
         a5xx::loadSsbos(w, addrs.data(), sizes.data(), nssbo);
         /* two packets (sizes, then addresses): walk them and forward each after its type-7 header */
@@ -345,6 +352,10 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
             i += 1 + h.count;
         }
     }
+    textures.emit(stream, a5xx::kBlockCsTex);
+    for (uint32_t r : {a5xx::A5XX_TPL1_VS_TEX_COUNT, a5xx::A5XX_TPL1_HS_TEX_COUNT, a5xx::A5XX_TPL1_DS_TEX_COUNT,
+                       a5xx::A5XX_TPL1_GS_TEX_COUNT, a5xx::A5XX_TPL1_FS_TEX_COUNT}) reg(stream, r, 0);
+    reg(stream, a5xx::A5XX_TPL1_CS_TEX_COUNT, textures.numTextures);
     auto emitLoad = [&](std::vector<uint32_t>& w) {
         stream.packet(uint32_t(a5xx::kLoadState4), w.data() + 1, uint32_t(w.size() - 1));
     };
@@ -379,7 +390,7 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
     // the end: the kernel's writes reach memory before the fence passes (the a6xx tail's CACHE_FLUSH_TS half;
     // an A5xx has no CCU to flush first, sysmem writes land through the UCHE). The timestamp goes to the
     // dispatch's own table page, as the a6xx tail's does.
-    uint32_t flush[4] = {0, uint32_t(table + kTableTimestampsAt), uint32_t((table + kTableTimestampsAt) >> 32), 0};
+    uint32_t flush[4] = {4u, uint32_t(table + kTableTimestampsAt), uint32_t((table + kTableTimestampsAt) >> 32), 1};
     stream.packet(uint32_t(pm4::Opcode::kEventWrite), flush, 4);
     return true;
 }
@@ -387,6 +398,7 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
 bool encodeAny(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], uint64_t indirect, const uint32_t local[3], const Bindings& bindings,
                const uint32_t* immediates, uint64_t program, uint64_t table, uint8_t* tableCpu, std::string* why, const Options& o) {
     if (o.a5xx) {
+        if (indirect) return refuse(why, "A5xx indirect dispatch is not implemented");
         return encodeA5xx(stream, k, groups, local, bindings, immediates, program, table, why);
     }
     static const char* const axis = "xyz";
@@ -925,9 +937,9 @@ bool CommandBuffer::dispatchAny(const Kernel& k, const uint32_t* groups, const B
         b = &withScratch;
     }
     compute::Options opts = options;
-    if (!opts.a5xx) {
-        opts.a5xx = (queue_.gpu().chipId() >> 16) == 0x0601;   // an Adreno 5xx: 0x0601xxxx (the A506 is 0x06010500)
-    }
+    const uint32_t chip = queue_.gpu().chipId();
+    if (k.chipId != 0 && k.chipId != chip) return refuseWork("kernel compiled for a different GPU chip");
+    opts.a5xx = (chip >> 24) == 5;
     pm4::Stream added;
     const bool encoded = args != nullptr ? compute::encodeIndirect(added, k, args->gpuAddress() + offset, loc, *b, immediates, program, table.gpuAddress(),
                                                                    table.contents(), &why, opts)

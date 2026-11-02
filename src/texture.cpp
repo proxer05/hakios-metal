@@ -444,6 +444,20 @@ std::shared_ptr<Texture> Texture::make(Gpu& gpu, const TextureDesc& desc, std::s
     if (!plan(desc, &info, &pitch, &bytes, why)) {
         return nullptr;
     }
+    if ((gpu.chipId() >> 24) == 5) {
+        if (desc.compressed || info->depth || info->twoPlane || info->blockW != 1 || desc.mipLevels != 1 || desc.samples != 1) {
+            refuse(why, "A5xx textures: single-level, single-sample linear colour layouts are served");
+            return nullptr;
+        }
+        // fdl5_layout: the final level's rows round to 32, each layer to 4K.
+        const uint64_t layer = (((uint64_t(desc.height) + 31) / 32 * 32 * pitch) + 4095) & ~uint64_t(4095);
+        bytes = layer * desc.depth;
+        auto buffer = newBuffer(gpu, bytes, why);
+        if (!buffer) return nullptr;
+        auto* t = new Texture(std::move(buffer), desc, info, pitch);
+        t->layerPitch_ = layer;
+        return adopt(t);
+    }
     if (desc.compressed) {
         // UBWC as Mesa lays it out for this chip (fdl6_layout with the tile mode and UBWC asked for, as turnip asks when
         // an image is optimal): the flag buffer first, then the tiled data, at offsets fdl gives
@@ -841,6 +855,56 @@ a6xx::TexConst Texture::sampledDescriptor() const {
     }
     d.dword[0] = swizzleWord(d.dword[0]);
     return d;
+}
+
+bool Texture::sampledDescriptor5(a5xx::TexConst* out, std::string* why) const {
+    if (desc_.mipLevels != 1 || desc_.samples != 1 || info_->depth || info_->twoPlane || info_->blockW != 1 || ubwc_) {
+        return refuse(why, "A5xx sampled view requires single-level, single-sample linear colour memory");
+    }
+    // fd5_format.c and a5xx.xml: uncompressed formats share these numeric
+    // encodings with FMT6. A8 is sampled as R8 plus (0,0,0,x), not FMT6_A8.
+    uint32_t fmt = uint32_t(info_->fmt6);
+    if (desc_.format == PixelFormat::kA8Unorm) fmt = 3;
+    const uint64_t layer = layerPitch_ ? layerPitch_ : sliceBytes() ? sliceBytes() : ((pitch_ * desc_.height + 4095) & ~uint64_t(4095));
+    if (desc_.width > 32767 || desc_.height > 32767 || pitch_ >= (1u << 22) || pitch_ % 64 || gpuAddress() % 32 ||
+        gpuAddress() >> 49 || layer % 4096 || layer >= (1ull << 26) || desc_.depth > 8191 ||
+        (desc_.type == TextureType::k3D && (layer >> 12) > 15) ||
+        offset_ > buffer_->length() || layer * (desc_.depth - 1) + pitch_ * desc_.height > buffer_->length() - offset_) {
+        return refuse(why, "A5xx texture address, pitch, dimensions or layer exceed the descriptor or backing memory");
+    }
+    uint32_t sw[4] = {0, 1, 2, info_->hasAlpha ? 3u : 5u};
+    // fd5_tex_swiz composes the format's channel swizzle, not the RB's SWAP.
+    if (info_->bytesPerPixel == 1 && desc_.format != PixelFormat::kA8Unorm) sw[1] = sw[2] = 4;
+    switch (desc_.format) {
+    case PixelFormat::kA8Unorm: sw[0] = sw[1] = sw[2] = 4; sw[3] = 0; break;
+    case PixelFormat::kR16Unorm: case PixelFormat::kR16Snorm: case PixelFormat::kR16Float:
+    case PixelFormat::kR16Uint: case PixelFormat::kR16Sint: case PixelFormat::kR32Float:
+    case PixelFormat::kR32Uint: case PixelFormat::kR32Sint: sw[1] = sw[2] = 4; break;
+    case PixelFormat::kRG8Unorm: case PixelFormat::kRG8Snorm: case PixelFormat::kRG8Uint: case PixelFormat::kRG8Sint:
+    case PixelFormat::kRG16Unorm: case PixelFormat::kRG16Snorm: case PixelFormat::kRG16Float:
+    case PixelFormat::kRG16Uint: case PixelFormat::kRG16Sint: case PixelFormat::kRG32Float:
+    case PixelFormat::kRG32Uint: case PixelFormat::kRG32Sint: sw[2] = 4; break;
+    default: break;
+    }
+    if (info_->swap == a6xx::WXYZ) std::swap(sw[0], sw[2]);
+    a5xx::TexConst d{};
+    d.dword[0] = (fmt << 22) | (info_->srgb ? 4u : 0u);
+    for (unsigned i = 0; i < 4; ++i) {
+        uint32_t s = swizzle_[i] < 2 ? 4 + swizzle_[i] : sw[swizzle_[i] - 2];
+        d.dword[0] |= s << (4 + 3 * i);
+    }
+    d.dword[1] = desc_.width | (desc_.height << 15);
+    uint32_t type = 1, depth = desc_.depth;
+    if (desc_.type == TextureType::k1D || desc_.type == TextureType::k1DArray) type = 0;
+    if (desc_.type == TextureType::k3D) type = 3;
+    if (desc_.type == TextureType::kCube || desc_.type == TextureType::kCubeArray) { type = 2; depth /= 6; }
+    d.dword[2] = (pitchAlign_ != ~0u ? pitchAlign_ : log2u(info_->bytesPerPixel)) | (uint32_t(pitch_) << 7) | (type << 29);
+    d.dword[3] = uint32_t(layer >> 12);
+    if (type == 3) d.dword[3] |= uint32_t(layer >> 12) << 23;
+    d.dword[4] = uint32_t(gpuAddress());
+    d.dword[5] = uint32_t(gpuAddress() >> 32) | (depth << 17);
+    *out = d;
+    return true;
 }
 
 a6xx::TexConst Texture::levelDescriptor(uint32_t level) const {
@@ -1312,12 +1376,69 @@ bool makeSampler(const SamplerDesc& d, Sampler* out, std::string* why) {
     f.chromaLinear = (f.min == A6XX_TEX_LINEAR || f.min == A6XX_TEX_ANISO) && (f.mag == A6XX_TEX_LINEAR || f.mag == A6XX_TEX_ANISO);   // Gallium: both linear
     f.bcolor = toColour ? d.borderColor : 0;
     TexSamp s = texSamp(f);
+    out->desc = d;
     for (uint32_t i = 0; i < kTexSampDwords; i++) out->words[i] = s.dword[i];
     {
         std::lock_guard<std::mutex> g(gIdLock);
         out->id = gNextId++;
         gSamplers[out->id] = *out;
     }
+    return true;
+}
+
+bool samplerDescriptor5(const Sampler& sampler, a5xx::TexSamp* out, std::string* why) {
+    const SamplerDesc& d = sampler.desc;
+    if (d.minFilter > 1 || d.magFilter > 1 || d.mipFilter > 2 || d.maxAnisotropy < 1 || d.maxAnisotropy > 16 || d.compareFunction > 7) {
+        return refuse(why, "A5xx sampler filter/anisotropy/compare is unsupported");
+    }
+    // Border tables and NPOT mirror-clamp need separate A5xx handling. Never
+    // reuse A6xx's border layout or silently map cubic to another filter.
+    auto wrap = [](uint32_t mode) -> int { return mode == 0 ? 1 : mode == 2 ? 0 : mode == 3 ? 2 : -1; };
+    int s = wrap(d.sAddress), t = wrap(d.tAddress), r = wrap(d.rAddress);
+    if (s < 0 || t < 0 || r < 0) return refuse(why, "A5xx sampler supports edge, repeat and mirrored-repeat addressing");
+    unsigned aniso = 0;
+    for (unsigned n = d.maxAnisotropy >> 1; n; n >>= 1) ++aniso;
+    uint32_t min = d.minFilter ? (aniso ? 2 : 1) : 0, mag = d.magFilter ? (aniso ? 2 : 1) : 0;
+    a5xx::TexSamp o{};
+    o.dword[0] = uint32_t(d.mipFilter == 2) | (mag << 1) | (min << 3) | (s << 5) | (t << 8) | (r << 11) | (aniso << 14);
+    const uint32_t minLod = lodFixed(d.lodMinClamp), maxLod = lodFixed(d.lodMaxClamp);
+    // fd5_sampler_state_create: no mip filter clamps to 0.125, so min vs
+    // mag filtering still works. MIPFILTER_LINEAR_FAR is not fd6's shortcut.
+    o.dword[1] = (d.compareFunction << 1) | (!d.normalizedCoordinates ? 32u : 0u) |
+        ((d.mipFilter ? maxLod : std::min(maxLod, 32u)) << 8) |
+        ((d.mipFilter ? minLod : std::min(minLod, 32u)) << 20);
+    *out = o;
+    return true;
+}
+
+bool textureTables5(const Kernel& k, const Bindings& b, TextureTables5* out, std::string* why) {
+    TextureTables5 t;
+    if (k.numTextureSlots > kMaxTextureSlots) return refuse(why, "A5xx texture table exceeds the slot limit");
+    t.numTextures = k.numTextureSlots;
+    for (uint32_t i = 0; i < kMaxTextureSlots; ++i) {
+        const auto& slot = k.textures[i];
+        if (slot.kind == kTexImage) return refuse(why, "A5xx storage image descriptors are not implemented");
+        if (slot.kind != kTexSampled) continue;
+        if (i >= t.numTextures || i >= b.textures.size() || !b.textures[i]) return refuse(why, "A5xx: missing sampled texture " + n(i));
+        const Texture& tex = *b.textures[i];
+        if ((!slot.isNull && !((b.nullMask >> i) & 1u) && !tex.isShaped(slot)) || tex.info().element != slot.element ||
+            (!slot.fbTarget && !(tex.desc().usage & kTextureUsageRead))) {
+            return refuse(why, "A5xx: texture " + n(i) + " shape, element type or read usage differs from the shader");
+        }
+        a5xx::TexConst d;
+        if (!tex.sampledDescriptor5(&d, why)) return false;
+        memcpy(t.textures + i * 12, d.dword, sizeof d.dword);
+    }
+    t.numSamplers = t.numTextures ? 1 : 0;
+    for (uint32_t i = 0; i < kMaxTextureSlots; ++i) {
+        if (!((k.samplerMask >> i) & 1u)) continue;
+        if (i >= b.samplers.size() || !b.samplers[i]) return refuse(why, "A5xx: missing sampler " + n(i));
+        a5xx::TexSamp d;
+        if (!samplerDescriptor5(*b.samplers[i], &d, why)) return false;
+        memcpy(t.samplers + i * 4, d.dword, sizeof d.dword);
+        t.numSamplers = i + 1;
+    }
+    *out = t;
     return true;
 }
 

@@ -89,7 +89,7 @@ TEST(compute5_dispatch_words)
     c.reg4(0x0e78au, 1, "HLSQ_UPDATE_CNTL");
     c.val(0x1f00000u, "HLSQ_UPDATE_CNTL value");
     c.reg4(0x0e7b7u, 2, "HLSQ_CS_CNTL_0");
-    c.val(0x3f00u | (0x3f00u << 8) | (0x3f00u << 16) | (0x3f00u << 24), "HLSQ_CS_CNTL_0 value");
+    c.val(0xfcfcfcfcu, "HLSQ_CS_CNTL_0 value (four 8-bit r63.x IDs)");
     c.val(0x1u, "HLSQ_CS_CNTL_1 value");
     c.reg4(0x0e7b0u, 7, "HLSQ_CS_NDRANGE_0");
     c.val((3u << 0) | (63u << 2) | (63u << 12) | (63u << 22), "HLSQ_CS_NDRANGE_0 value");

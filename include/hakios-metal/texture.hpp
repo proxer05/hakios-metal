@@ -25,6 +25,7 @@
 #include <string>
 
 #include "hakios-metal/a6xx.hpp"
+#include "hakios-metal/texture5.hpp"
 #include "hakios-metal/command.hpp"
 #include "hakios-metal/kernel.hpp"
 
@@ -332,6 +333,9 @@ public:
     a6xx::TexConst sampledDescriptor() const;
     // ...of mip level L alone: what a framebuffer fetch reads of an attachment drawn at that level
     a6xx::TexConst levelDescriptor(uint32_t level) const;
+    // A5xx's 12-word sampled view of a linear, single-level colour texture.
+    // No A6xx descriptor is ever truncated/reinterpreted for this path.
+    bool sampledDescriptor5(a5xx::TexConst* out, std::string* why) const;
     // the descriptor a stib/ldib addresses it through, at IBO slot numSsbos + index: the same without PITCHALIGN,
     // MIPLVLS and SAMPLES (fd6_view.c:383-397)
     a6xx::TexConst storageDescriptor() const;
@@ -400,6 +404,7 @@ struct SamplerDesc {
 struct Sampler {
     uint32_t words[4] = {};
     uint64_t id = 0;   // makeSampler's: what an argument buffer encodes for it (gpuResourceID), never 0
+    SamplerDesc desc{}; // semantic state retained for the A5xx encoder
 };
 // the sampler makeSampler made with ID, as it was made (a copy kept for the process: samplers are 24 bytes and few);
 // nullptr for an id makeSampler never gave
@@ -413,5 +418,17 @@ const Sampler* samplerById(uint64_t id);
 // borders, MirrorClampToEdge (power-of-two sizes only on a6xx, and the sampler does not know the texture), anisotropy
 // above 1, a compare function other than Never.
 bool makeSampler(const SamplerDesc& desc, Sampler* out, std::string* why);
+bool samplerDescriptor5(const Sampler& sampler, a5xx::TexSamp* out, std::string* why);
+
+struct TextureTables5 {
+    uint32_t textures[kMaxTextureSlots * 12] = {};
+    uint32_t samplers[kMaxTextureSlots * 4] = {};
+    uint32_t numTextures = 0, numSamplers = 0;
+    void emit(pm4::Stream& stream, uint32_t block) const {
+        a5xx::loadTextureTable(stream, block, a5xx::kStateShader, samplers, numSamplers);
+        a5xx::loadTextureTable(stream, block, a5xx::kStateConstants, textures, numTextures);
+    }
+};
+bool textureTables5(const Kernel& kernel, const Bindings& bindings, TextureTables5* out, std::string* why);
 
 }  // namespace hakios::metal

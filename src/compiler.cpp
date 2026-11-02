@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <mutex>
+#include <map>
 
 #ifdef HAKIOS_METAL_MESA
 // Mesa's headers carry their own C++ guards (and templates behind them: no extern "C" around these) and are not clean
@@ -23,12 +24,12 @@ namespace hakios::metal {
 
 bool hasCompiler() { return false; }
 
-std::unique_ptr<CompiledKernel> compileAir(const void*, size_t, std::string* why, const FunctionConstants&) {
+std::unique_ptr<CompiledKernel> compileAir(const void*, size_t, std::string* why, const FunctionConstants&, uint32_t) {
     *why = "no compiler in this build: it is linked in with MESA_BUILD= (tools/compiler.mk), and was not";
     return nullptr;
 }
 
-std::unique_ptr<CompiledStage> compileStage(const void*, size_t, std::string* why, const FunctionConstants&, uint32_t, const KnownBuffer*) {
+std::unique_ptr<CompiledStage> compileStage(const void*, size_t, std::string* why, const FunctionConstants&, uint32_t, const KnownBuffer*, uint32_t) {
     *why = "no compiler in this build: it is linked in with MESA_BUILD= (tools/compiler.mk), and was not";
     return nullptr;
 }
@@ -49,12 +50,18 @@ namespace {
 
 std::mutex gCompilerLock;   // ir3 keeps state in the compiler object; one compilation at a time
 
-// one compiler for the chip, as the kernel names it: Mesa's table resolves 0x06030500 to the Adreno 7c+ Gen 3 row
-ir3_compiler* theCompiler() {
-    static ir3_compiler* compiler = [] {
+// Called under gCompilerLock. Keep each target's compiler separate: creating an
+// A506 pipeline must not change later A6xx compilations (or vice versa).
+ir3_compiler* theCompiler(uint32_t chipId = a6xx::kChipId) {
+    static std::map<uint32_t, ir3_compiler*> compilers;
+    auto it = compilers.find(chipId);
+    if (it != compilers.end()) return it->second;
+    auto create = [chipId] {
         fd_dev_id id{};
         id.gpu_id = 0;
-        id.chip_id = a6xx::kChipId;
+        id.chip_id = chipId;
+        const struct fd_dev_info* info = fd_dev_info_raw(&id);
+        if (info == nullptr) return static_cast<ir3_compiler*>(nullptr);
         // A framebuffer fetch (nir_texop_txf_ms_fb) through the FS's own texture table, at the slot after its last
         // texture, as turnip has it (tu_device.cc: -1): the zero default would make it a bindless read of descriptor
         // set 0, which this driver never binds
@@ -63,8 +70,10 @@ ir3_compiler* theCompiler() {
         // the GLSL type cache, which ir3 uses for the driver UBOs' types (get_driver_ubo_type: a module's constant table
         // is read through one); held for the life of the process, as the compiler is
         glsl_type_singleton_init_or_ref();
-        return ir3_compiler_create(nullptr, &id, fd_dev_info_raw(&id), &options);
-    }();
+        return ir3_compiler_create(nullptr, &id, info, &options);
+    };
+    ir3_compiler* compiler = create();
+    compilers.emplace(chipId, compiler);
     return compiler;
 }
 
@@ -224,6 +233,7 @@ bool walkTextures(nir_shader* nir, Kernel& k, uint32_t* highestSampler, std::str
 // The front end's output and everything ir3 built on it, freed together when the compile is over (the Kernel and the
 // Stage copy what they keep: the words, the immediates, the tables).
 struct Translation {
+    ir3_compiler* compiler;
     void* mem = nullptr;                  // ralloc context: the function constants, the NIR, the front end's info
     nir_shader* nir = nullptr;
     air_shader_info info{};
@@ -231,7 +241,7 @@ struct Translation {
     ir3_shader_variant* v = nullptr;
     uint32_t* bin = nullptr;              // the assembled binary (ralloc'd under the variant)
     uint8_t fbTargets[kMaxTextureSlots] = {};   // lowerFbRead's slots: n + 1 where colour attachment n is read
-    Translation() = default;
+    explicit Translation(ir3_compiler* c = theCompiler()) : compiler(c) {}
     Translation(const Translation&) = delete;
     Translation& operator=(const Translation&) = delete;
     ~Translation() {
@@ -278,7 +288,7 @@ bool translate(const void* bitcode, size_t size, Translation& t, std::string* wh
     options.constants = constants;
     options.num_constants = numConstants;
     const char* error = nullptr;
-    t.nir = air_to_nir(t.mem, bitcode, size, nullptr, &options, ir3_get_compiler_options(theCompiler()), &t.info, &error);
+    t.nir = air_to_nir(t.mem, bitcode, size, nullptr, &options, ir3_get_compiler_options(t.compiler), &t.info, &error);
     if (t.nir == nullptr) return refuse(why, std::string("the front end refused it: ") + (error ? error : "no reason given"));
     // the known buffer's reads folded, its offsets folded first (a field's offset is the front end's arithmetic on the
     // pointer), until nothing more folds: a value read may decide the offset of another read
@@ -670,7 +680,7 @@ bool usesSubgroup(nir_shader* nir) {
 }
 
 bool compileVariant(Translation& t, PassOrder order, std::string* why) {
-    ir3_compiler* compiler = theCompiler();
+    ir3_compiler* compiler = t.compiler;
     nir_shader* nir = t.nir;
     // what the consumer owes before ir3: the front end emits NIR's own system values, as the SPIR-V one does
     nir_lower_system_values(nir);
@@ -1063,15 +1073,19 @@ const char* className(uint8_t element) { return element == kElemFloat ? "floats"
 
 }  // namespace
 
-bool hasCompiler() { return theCompiler() != nullptr; }
-
-std::unique_ptr<CompiledKernel> compileAir(const void* bitcode, size_t size, std::string* why, const FunctionConstants& constants) {
+bool hasCompiler() {
     std::lock_guard<std::mutex> g(gCompilerLock);
-    if (theCompiler() == nullptr) {
-        refuse(why, "ir3 has no compiler for chip 0x06030500");
+    return theCompiler() != nullptr;
+}
+
+std::unique_ptr<CompiledKernel> compileAir(const void* bitcode, size_t size, std::string* why, const FunctionConstants& constants, uint32_t chipId) {
+    std::lock_guard<std::mutex> g(gCompilerLock);
+    ir3_compiler* compiler = theCompiler(chipId);
+    if (compiler == nullptr) {
+        refuse(why, "ir3 has no compiler for chip " + std::to_string(chipId));
         return nullptr;
     }
-    Translation t;
+    Translation t(compiler);
     if (!translate(bitcode, size, t, why, constants)) return nullptr;
     if (t.nir->info.stage != MESA_SHADER_COMPUTE) {
         refuse(why, std::string(t.info.entry_point ? t.info.entry_point : "the function") +
@@ -1080,6 +1094,7 @@ std::unique_ptr<CompiledKernel> compileAir(const void* bitcode, size_t size, std
     }
     // the textures, images and samplers as the instructions address them, before any lowering touches them
     auto out = std::make_unique<CompiledKernel>();
+    out->kernel.chipId = chipId;
     uint32_t highestSampler = 0;
     if (!walkTextures(t.nir, out->kernel, &highestSampler, why)) return nullptr;
     if (!nullTextures(t, out->kernel, false, why)) return nullptr;
@@ -1095,7 +1110,7 @@ std::unique_ptr<CompiledKernel> compileAir(const void* bitcode, size_t size, std
 
 namespace {
 std::unique_ptr<CompiledStage> compileStageOnce(const void* bitcode, size_t size, std::string* why, const FunctionConstants& constants, uint32_t iboBase,
-                                                const KnownBuffer* known);
+                                                const KnownBuffer* known, ir3_compiler* compiler);
 }  // namespace
 
 // A stage compiled as turnip compiles it, unless that spills: ir3's preamble pass hoists what is uniform into a
@@ -1105,18 +1120,21 @@ std::unique_ptr<CompiledStage> compileStageOnce(const void* bitcode, size_t size
 // preamble the same function needs 21 registers and spills nothing. A stage that spills is compiled again without
 // it, and that one is taken when it spills less.
 std::unique_ptr<CompiledStage> compileStage(const void* bitcode, size_t size, std::string* why, const FunctionConstants& constants, uint32_t iboBase,
-                                           const KnownBuffer* known) {
+                                           const KnownBuffer* known, uint32_t chipId) {
     std::lock_guard<std::mutex> g(gCompilerLock);
-    if (theCompiler() == nullptr) {
-        refuse(why, "ir3 has no compiler for chip 0x06030500");
+    ir3_compiler* compiler = theCompiler(chipId);
+    if (compiler == nullptr) {
+        refuse(why, "ir3 has no compiler for chip " + std::to_string(chipId));
         return nullptr;
     }
-    std::unique_ptr<CompiledStage> with = compileStageOnce(bitcode, size, why, constants, iboBase, known);
-    if (with == nullptr || with->stage.k.pvtmemSize == 0 || !theCompiler()->has_preamble) return with;
-    theCompiler()->has_preamble = false;
+    std::unique_ptr<CompiledStage> with = compileStageOnce(bitcode, size, why, constants, iboBase, known, compiler);
+    if (with != nullptr) with->stage.k.chipId = chipId;
+    if (with == nullptr || with->stage.k.pvtmemSize == 0 || !compiler->has_preamble) return with;
+    compiler->has_preamble = false;
     std::string whyNot;
-    std::unique_ptr<CompiledStage> without = compileStageOnce(bitcode, size, &whyNot, constants, iboBase, known);
-    theCompiler()->has_preamble = true;
+    std::unique_ptr<CompiledStage> without = compileStageOnce(bitcode, size, &whyNot, constants, iboBase, known, compiler);
+    if (without != nullptr) without->stage.k.chipId = chipId;
+    compiler->has_preamble = true;
     return without != nullptr && preferWithoutPreamble(with->stage.k, without->stage.k) ? std::move(without) : std::move(with);
 }
 
@@ -1124,8 +1142,8 @@ std::unique_ptr<CompiledStage> compileStage(const void* bitcode, size_t size, st
 
 namespace {
 std::unique_ptr<CompiledStage> compileStageOnce(const void* bitcode, size_t size, std::string* why, const FunctionConstants& constants, uint32_t iboBase,
-                                                const KnownBuffer* known) {
-    Translation t;
+                                                const KnownBuffer* known, ir3_compiler* compiler) {
+    Translation t(compiler);
     if (!translate(bitcode, size, t, why, constants, known)) return nullptr;
     // the stage is the module's named metadata (air.vertex / air.fragment / air.kernel: air_to_nir.c module_stage)
     const std::string name = t.info.entry_point ? t.info.entry_point : "the function";

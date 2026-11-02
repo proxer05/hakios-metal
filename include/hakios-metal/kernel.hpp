@@ -166,7 +166,8 @@ struct Kernel {
     // the UBO pointer table's vec4 offset (ir3_const_allocations' UBO_PTRS; an a5xx fact: a6xx loads UBO state
     // and ldc's through it, an a5xx ldc's pointer pairs) — last, so the checked-in fixtures' initializer lists
     // end before it and the regeneration of one needs no struct change
-    int32_t uboPtrsOffsetVec4;
+    int32_t uboPtrsOffsetVec4 = -1;
+    uint32_t chipId = 0;   // compiler target; 0 for older hand-authored fixtures
 };
 
 } // namespace hakios::metal

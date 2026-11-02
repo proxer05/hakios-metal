@@ -102,6 +102,8 @@ typedef struct hakios_metal_constant {
 hakios_metal_kernel *hakios_metal_kernel_compile_bitcode_constants(const void *bitcode, size_t size,
     const hakios_metal_constant *constants, unsigned count);
 void hakios_metal_kernel_free(hakios_metal_kernel *kernel);
+/* Compile for the chip reported by DEVICE (including A506), rather than the legacy A6xx default. */
+hakios_metal_kernel *hakios_metal_kernel_compile_bitcode_on_device(hakios_metal_device *device, const void *bitcode, size_t size);
 const char *hakios_metal_kernel_name(hakios_metal_kernel *kernel);
 /* the argument buffer at [[buffer(SET)]] of the function in BITCODE, as MTLFunction's -newArgumentEncoderWithBufferIndex:
  * lays it out: every member the set declares, in id order, its [[id(n)]] into IDS and its byte offset into OFFSETS (at

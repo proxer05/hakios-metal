@@ -33,8 +33,8 @@ static constexpr Opcode kExecCsIndirect = static_cast<Opcode>(0x41);   // CP_EXE
 // a3xx_threadsize (adreno_common.xml): TWO_QUADS 0, FOUR_QUADS 1. fd5's cs path uses TWO_QUADS.
 static constexpr uint32_t kThreadSizeTwoQuads = 0;
 
-// regid(r,c) as Mesa's ir3 writes it: (r << 8) | (c*2). 63.0 (rj63) means "not used".
-constexpr uint16_t regid(uint8_t row, uint8_t col) { return (uint16_t)((row << 8) | (col * 2)); }
+// ir3.h: regid(r,c) = (r << 2) | c. 63.0 is the unused 8-bit sysval ID.
+constexpr uint16_t regid(uint8_t row, uint8_t col) { return uint16_t((row << 2) | col); }
 static constexpr uint16_t kRegidUnused = regid(63, 0);
 
 // --- HLSQ_CONTROL_0_REG: FSTHREADSIZE pos 0, CSTHREADSIZE pos 2 (a5xx.xml); fd5 adds 0x880 --------------------------

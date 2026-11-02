@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "pm4.hpp"
+#include "a5xx.hpp"
 
 namespace hakios::metal::a5xx {
 
