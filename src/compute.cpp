@@ -337,7 +337,13 @@ bool encodeA5xx(pm4::Stream& stream, const Kernel& k, const uint32_t groups[3], 
         }
         std::vector<uint32_t> w;
         a5xx::loadSsbos(w, addrs.data(), sizes.data(), nssbo);
-        stream.packet(uint32_t(a5xx::kLoadState4), w.data() + 1, uint32_t(w.size() - 1));
+        /* two packets (sizes, then addresses): walk them and forward each after its type-7 header */
+        size_t i = 0;
+        while (i < w.size()) {
+            hakios::metal::pm4::Header h = hakios::metal::pm4::decode(w[i]);
+            stream.packet(h.opcode, w.data() + i + 1, h.count);
+            i += 1 + h.count;
+        }
     }
     auto emitLoad = [&](std::vector<uint32_t>& w) {
         stream.packet(uint32_t(a5xx::kLoadState4), w.data() + 1, uint32_t(w.size() - 1));
