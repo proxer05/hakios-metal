@@ -280,6 +280,9 @@ hakios_metal_program *hakios_metal_program_new_bitcode(const void *vs_bitcode, s
 hakios_metal_program *hakios_metal_program_new_bitcode_constants(const void *vs_bitcode, size_t vs_size,
     const hakios_metal_constant *vs_constants, unsigned vs_count, const void *fs_bitcode, size_t fs_size,
     const hakios_metal_constant *fs_constants, unsigned fs_count, unsigned color_pixel_format);
+/* ...both stages compiled for DEVICE's chip (including the A506), rather than the legacy A6xx default. */
+hakios_metal_program *hakios_metal_program_new_bitcode_on_device(hakios_metal_device *device,
+    const void *vs_bitcode, size_t vs_size, const void *fs_bitcode, size_t fs_size, unsigned color_pixel_format);
 /* BASE again with its fragment stage (FS_BITCODE and FS_CONSTANTS, as BASE was made) compiled for the LENGTH BYTES its
  * constant buffer at [[buffer(BINDING)]] holds (compileStage's KnownBuffer): the branches those bytes decide are decided
  * at compile time. Draws whose buffer holds exactly these bytes may use it in BASE's place; BASE's blending, vertex

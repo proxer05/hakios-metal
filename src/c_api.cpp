@@ -922,30 +922,45 @@ hakios_metal_program* hakios_metal_program_new_bitcode(const void* vsBitcode, si
     return hakios_metal_program_new_bitcode_constants(vsBitcode, vsSize, nullptr, 0, fsBitcode, fsSize, nullptr, 0, colorPixelFormat);
 }
 
-hakios_metal_program* hakios_metal_program_new_bitcode_constants(const void* vsBitcode, size_t vsSize, const hakios_metal_constant* vsConstants, unsigned vsCount,
-                                                                 const void* fsBitcode, size_t fsSize, const hakios_metal_constant* fsConstants, unsigned fsCount,
-                                                                 unsigned colorPixelFormat) {
+// Both stages compiled for CHIP (0x06030500, the legacy A6xx default, when the caller has no device). The two public
+// entry points differ only in where they get it, so the null-fs fallback and the fsIboBase rule live here once.
+static hakios_metal_program* programNewBitcode(const void* vsBitcode, size_t vsSize, const FunctionConstants& vsConstants,
+                                               const void* fsBitcode, size_t fsSize, const FunctionConstants& fsConstants,
+                                               unsigned colorPixelFormat, uint32_t chipId) {
     std::string why;
-    std::unique_ptr<CompiledStage> vs = compileStage(vsBitcode, vsSize, &why, constantsOf(vsConstants, vsCount));
+    std::unique_ptr<CompiledStage> vs = compileStage(vsBitcode, vsSize, &why, vsConstants, 0, nullptr, chipId);
     if (vs == nullptr) {
         failed(why);
         return nullptr;
     }
     // no fragment bitcode: a pipeline with no fragment function (a depth-only one), which runs null_fs -- a fragment
     // function of our own that writes nothing (tools/kernels/null_fs.ll), compiled as any other so that it links
+    FunctionConstants fsConst = fsConstants;
     if (fsBitcode == nullptr || fsSize == 0) {
         fsBitcode = kernels::null_fs_bc;
         fsSize = sizeof kernels::null_fs_bc;
-        fsConstants = nullptr;
-        fsCount = 0;
+        fsConst.clear();
     }
     // the FS's device buffers past the VS's in the one IBO table the two share
-    std::unique_ptr<CompiledStage> fs = compileStage(fsBitcode, fsSize, &why, constantsOf(fsConstants, fsCount), vs->stage.k.numSsbos);
+    std::unique_ptr<CompiledStage> fs = compileStage(fsBitcode, fsSize, &why, fsConst, vs->stage.k.numSsbos, nullptr, chipId);
     if (fs == nullptr) {
         failed(why);
         return nullptr;
     }
     return programOf(std::move(vs), std::move(fs), colorPixelFormat);
+}
+
+hakios_metal_program* hakios_metal_program_new_bitcode_on_device(hakios_metal_device* d, const void* vsBitcode, size_t vsSize,
+                                                                 const void* fsBitcode, size_t fsSize, unsigned colorPixelFormat) {
+    if (d == nullptr) { failed("no device for the compiler target"); return nullptr; }
+    return programNewBitcode(vsBitcode, vsSize, {}, fsBitcode, fsSize, {}, colorPixelFormat, d->gpu->chipId());
+}
+
+hakios_metal_program* hakios_metal_program_new_bitcode_constants(const void* vsBitcode, size_t vsSize, const hakios_metal_constant* vsConstants, unsigned vsCount,
+                                                                 const void* fsBitcode, size_t fsSize, const hakios_metal_constant* fsConstants, unsigned fsCount,
+                                                                 unsigned colorPixelFormat) {
+    return programNewBitcode(vsBitcode, vsSize, constantsOf(vsConstants, vsCount), fsBitcode, fsSize,
+                             constantsOf(fsConstants, fsCount), colorPixelFormat, 0x06030500);
 }
 
 hakios_metal_program* hakios_metal_program_specialize(hakios_metal_program* base, const void* fsBitcode, size_t fsSize, const hakios_metal_constant* fsConstants,
