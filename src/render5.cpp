@@ -208,6 +208,8 @@ bool encode(pm4::Stream& stream, const Program& p, const RenderPass& pass, const
     packet(s, 0x1d, {0}); // CP_SKIP_IB2_ENABLE_GLOBAL
     packet(s, 0x64, {1}); // CP_SET_VISIBILITY_OVERRIDE
     regs(s, A5XX_GRAS_SC_WINDOW_SCISSOR_TL, {0, (w - 1) | ((h - 1) << 16)});
+    regs(s, A5XX_GRAS_SC_SCREEN_SCISSOR_TL_0, {uint32_t(sc.x) | (uint32_t(sc.y) << 16),
+        uint32_t(sc.x + sc.width - 1) | (uint32_t(sc.y + sc.height - 1) << 16)});
     regs(s, A5XX_RB_RESOLVE_CNTL_1, {0, (w - 1) | ((h - 1) << 16)});
     regs(s, A5XX_RB_DEPTH_BUFFER_INFO, {0, 0, 0, 0, 0});
     reg(s, A5XX_RB_STENCIL_INFO, 0);
@@ -217,7 +219,8 @@ bool encode(pm4::Stream& stream, const Program& p, const RenderPass& pass, const
     reg(s, A5XX_RB_RENDER_COMPONENTS, 0xf); // fd5_emit: RT0 writes R, G, B and A
     for (unsigned i = 0; i < 8; ++i) {
         regs(s, A5XX_RB_MRT_FLAG_BUFFER(i), {0, 0, 0, 0});
-        reg(s, A5XX_RB_MRT_CONTROL + 7 * i, i == 0 ? 0x780 : 0);
+        // ROP_CODE(ROP_COPY=12) << 3 | COMPONENT_ENABLE(0xf) << 7; the other targets are unused.
+        reg(s, A5XX_RB_MRT_CONTROL + 7 * i, i == 0 ? 0x7e0 : 0);
     }
     reg(s, A5XX_SP_BLEND_CNTL, 0x100); reg(s, A5XX_RB_BLEND_CNTL, 0xffff0000);
     const uint32_t vsconst = (vs.k.constlen + 3) / 4, fsconst = (fs.k.constlen + 3) / 4;
@@ -252,7 +255,7 @@ bool encode(pm4::Stream& stream, const Program& p, const RenderPass& pass, const
     for (unsigned i = 0; i < 6; ++i) if (ij[ijOrder[i]] != 0xfc) inputs |= 1u << i;
     if (fs.fragcoordCompmask || fs.faceRegid != 0xfc) inputs |= 8;
     reg(s, A5XX_GRAS_CNTL, inputs); regs(s, A5XX_RB_RENDER_CONTROL0, {inputs, fs.faceRegid != 0xfc ? 2u : 0u});
-    reg(s, A5XX_SP_FS_OUTPUT_REG, fs.colorRegid[0] | (fs.colorHalf[0] ? 0x100u : 0));
+    regs(s, A5XX_SP_FS_OUTPUT_REG, {fs.colorRegid[0] | (fs.colorHalf[0] ? 0x100u : 0), 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc});
     reg(s, A5XX_RB_FS_OUTPUT_CNTL, 1); reg(s, A5XX_SP_FS_OUTPUT_CNTL, 1 | (0xfcu << 5) | (0xfcu << 13));
     reg(s, A5XX_HLSQ_UPDATE_CNTL, 0x020fffff); reg(s, A5XX_VPC_GS_SIV_CNTL, 0xffff); reg(s, A5XX_SP_SP_CNTL, 0x10);
     reg(s, A5XX_GRAS_VS_CL_CNTL, 0); reg(s, A5XX_VPC_CLIP_CNTL, 0xffff00); reg(s, A5XX_PC_CLIP_CNTL, 0);
@@ -268,6 +271,8 @@ bool encode(pm4::Stream& stream, const Program& p, const RenderPass& pass, const
     for (const auto* c : {&vc, &fc}) append(s, *c);
     vt.emit(s, 0); ft.emit(s, 4);
     regs(s, A5XX_TPL1_VS_TEX_COUNT, {vt.numTextures, 0, 0, 0}); regs(s, A5XX_TPL1_FS_TEX_COUNT, {ft.numTextures, 0});
+    // fd5_emit_render_cntl: a normal (non-binning, non-blit) draw sets bit 3 of both.
+    reg(s, A5XX_RB_RENDER_CNTL, 0x8); reg(s, A5XX_GRAS_SC_CNTL, 0x8);
     packet(s, 0x38, {0x84, 1, d.vertexCount}); // DI_PT_TRILIST, AUTO_INDEX, IGNORE_VISIBILITY
     s.waitForIdle(); flush(s, 29, scratch + 4, 2); flush(s, 4, scratch + 8, 3);
     append(stream, s);

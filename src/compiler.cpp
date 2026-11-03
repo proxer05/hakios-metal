@@ -1013,6 +1013,10 @@ bool fillStage(Translation& t, const OutputClasses& oc, Stage& s, std::string* w
         s.writesViewport = writtenOutput(v, VARYING_SLOT_VIEWPORT) >= 0;
     }
     s.vertexIdRegid = ir3_find_sysval_regid(v, SYSTEM_VALUE_VERTEX_ID);
+    // gen 5 lowers vertex_id to VERTEX_ID_ZERO_BASE (the VFD's in0) plus the first_vertex driver param;
+    // fd5 gives VFD_CONTROL_1 that regid (fd5_program.c:277-278), and the zero-base input is the one the VFD feeds.
+    if (s.vertexIdRegid == a6xx::kRegidNone)
+        s.vertexIdRegid = ir3_find_sysval_regid(v, SYSTEM_VALUE_VERTEX_ID_ZERO_BASE);
     s.instanceIdRegid = ir3_find_sysval_regid(v, SYSTEM_VALUE_INSTANCE_ID);
     s.clipMask = v->clip_mask;
     s.cullMask = v->cull_mask;

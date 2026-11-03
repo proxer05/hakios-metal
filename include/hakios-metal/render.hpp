@@ -98,7 +98,7 @@ struct Stage {
 
     // --- a vertex stage ---
     uint32_t numAttributes;   // inputs that are not sysvals: VFD_CONTROL_0.FETCH_CNT/DECODE_CNT, one VFD_DEST_CNTL_INSTR each; refused when != 0 (no vertex descriptor yet)
-    uint32_t vertexIdRegid;   // SYSTEM_VALUE_VERTEX_ID -> VFD_CONTROL_1.REGID4VTX; kRegidNone when unread
+    uint32_t vertexIdRegid;   // SYSTEM_VALUE_VERTEX_ID (or gen 5's VERTEX_ID_ZERO_BASE) -> VFD_CONTROL_1.REGID4VTX; kRegidNone when unread
     uint32_t instanceIdRegid; // SYSTEM_VALUE_INSTANCE_ID -> VFD_CONTROL_1.REGID4INST
     uint32_t positionRegid;   // VARYING_SLOT_POS -> the linkage's position entry, VPC_VS_PACK.POSITIONLOC; refused when kRegidNone
     uint32_t pointSizeRegid;  // VARYING_SLOT_PSIZ; refused when valid

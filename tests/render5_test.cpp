@@ -195,6 +195,16 @@ TEST(render5_sysmem_draw_words) {
 
     // fd5_emit's framebuffer block: RT0 writes all four components.
     CHECK_EQ(s.reg(a5xx::A5XX_RB_RENDER_COMPONENTS), 0xfu);
+    // fd5_blend_state_create's default: ROP_COPY(12) and all four components.
+    CHECK_EQ(s.reg(a5xx::A5XX_RB_MRT_CONTROL), 0x7e0u);
+    // fd5_emit_render_cntl before the draw: bit 3 of both, a normal non-binning draw.
+    CHECK_EQ(s.reg(a5xx::A5XX_RB_RENDER_CNTL), 0x8u);
+    CHECK_EQ(s.reg(a5xx::A5XX_GRAS_SC_CNTL), 0x8u);
+    // fd5_emit_state's scissor block writes the screen scissor too, not only the viewport one.
+    CHECK_EQ(s.reg(a5xx::A5XX_GRAS_SC_SCREEN_SCISSOR_TL_0), 0u);
+    CHECK_EQ(s.reg(a5xx::A5XX_GRAS_SC_SCREEN_SCISSOR_TL_0 + 1), (63u | (63u << 16)));
+    // SP_FS_OUTPUT_REG(1..7) must name no register, as fd5 writes all eight.
+    CHECK_EQ(s.reg(a5xx::A5XX_SP_FS_OUTPUT_REG + 1), 0xfcu);
 
     // The VS/FS program addresses and their config words: ENABLED (1), VS constlen 2 vec4, FS at instruction 63,
     // which is 64 - instrlen(1) in the high byte; HLSQ_VS_CNTL's two INSTRLEN fields are 1 instruction each.
@@ -315,6 +325,7 @@ TEST(render5_draws_the_compiled_tri_flat) {
     if (vs == nullptr) return;
     // gen 5 lowers vertex_id to zero-base plus this driver param, with no buffer bound
     CHECK_EQ(vs->stage.k.driverParamsOffsetVec4, 0);
+    CHECK_EQ(vs->stage.vertexIdRegid, 0u);   // VFD_CONTROL_1 must feed in0 (r0.x)
     std::shared_ptr<CompiledStage> fs(compileStage(fsbc.data(), fsbc.size(), &why, {}, vs->stage.k.numSsbos, nullptr, kChipA506));
     if (fs == nullptr) std::printf("  tri_flat_fs: %s\n", why.c_str());
     CHECK(fs != nullptr);
@@ -328,6 +339,10 @@ TEST(render5_draws_the_compiled_tri_flat) {
     Encoded e(r, program->program, RenderPass{}, triangle());
     if (!e.ok) std::fprintf(stderr, "  encode refused: \"%s\"\n", e.error.c_str());
     CHECK(e.ok);
+    if (e.ok) {
+        Words s(e.stream.words());
+        CHECK_EQ(s.reg(a5xx::A5XX_VFD_CONTROL_1) & 0xffu, 0u);   // REGID4VTX = in0, not kRegidNone
+    }
 }
 
 TEST(render5_refusals_leave_the_stream_empty) {
