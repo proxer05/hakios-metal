@@ -12,6 +12,7 @@
 
 #include "hakios-metal/a5xx.hpp"
 #include "hakios-metal/command.hpp"
+#include "hakios-metal/compiler.hpp"
 #include "hakios-metal/fake_gpu.hpp"
 #include "hakios-metal/pm4.hpp"
 #include "hakios-metal/render5.hpp"
@@ -284,6 +285,49 @@ TEST(render5_serves_vertex_driver_params) {
     p.fs.k.constlen = 8;
     refused(p, RenderPass{}, triangle(),
             "A506 render: driver parameters are only served to the vertex stage");
+}
+
+TEST(render5_draws_the_compiled_tri_flat) {
+    if (!hasCompiler()) {
+        std::printf("       (no compiler in this build: the compiled tri_flat draw did not run)\n");
+        return;
+    }
+    auto readBitcode = [](const char* name) {
+        std::vector<uint8_t> bytes;
+        const std::string path = std::string("out/host/kernels/") + name + ".bc";
+        if (FILE* f = std::fopen(path.c_str(), "rb")) {
+            uint8_t buffer[4096];
+            size_t n;
+            while ((n = std::fread(buffer, 1, sizeof buffer, f)) > 0) bytes.insert(bytes.end(), buffer, buffer + n);
+            std::fclose(f);
+        }
+        return bytes;
+    };
+    const auto vsbc = readBitcode("tri_flat_vs"), fsbc = readBitcode("tri_flat_fs");
+    CHECK(!vsbc.empty());
+    CHECK(!fsbc.empty());
+    if (vsbc.empty() || fsbc.empty()) return;
+
+    std::string why;
+    std::shared_ptr<CompiledStage> vs(compileStage(vsbc.data(), vsbc.size(), &why, {}, 0, nullptr, kChipA506));
+    if (vs == nullptr) std::printf("  tri_flat_vs: %s\n", why.c_str());
+    CHECK(vs != nullptr);
+    if (vs == nullptr) return;
+    // gen 5 lowers vertex_id to zero-base plus this driver param, with no buffer bound
+    CHECK_EQ(vs->stage.k.driverParamsOffsetVec4, 0);
+    std::shared_ptr<CompiledStage> fs(compileStage(fsbc.data(), fsbc.size(), &why, {}, vs->stage.k.numSsbos, nullptr, kChipA506));
+    if (fs == nullptr) std::printf("  tri_flat_fs: %s\n", why.c_str());
+    CHECK(fs != nullptr);
+    if (fs == nullptr) return;
+    auto program = linkProgram(vs, fs, PixelFormat::kRGBA8Unorm, &why);
+    if (program == nullptr) std::printf("  tri_flat: %s\n", why.c_str());
+    CHECK(program != nullptr);
+    if (program == nullptr) return;
+
+    Rig r;
+    Encoded e(r, program->program, RenderPass{}, triangle());
+    if (!e.ok) std::fprintf(stderr, "  encode refused: \"%s\"\n", e.error.c_str());
+    CHECK(e.ok);
 }
 
 TEST(render5_refusals_leave_the_stream_empty) {
