@@ -446,6 +446,7 @@ bool CommandBuffer::copy(const Buffer& from, uint64_t fromOffset, const Buffer& 
         return true;
     }
     if (fromOffset % 4 || toOffset % 4 || length % 4) {
+        if ((queue_.gpu().chipId() >> 24) == 5) return refuseWork("A506: byte-aligned buffer copies are not implemented");
         // the command processor moves words; a copy of bytes goes through the 2D engine instead (a pass of its own).
         // MapKit's snapshot service copies rows of 2 bytes into its textures.
         std::string why;

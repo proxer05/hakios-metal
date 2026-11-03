@@ -3128,6 +3128,7 @@ bool CommandBuffer::blitInto(const Texture& src, uint32_t srcLevel, render::Blit
     if (status_ > kEnqueued) {
         return fail("blit after commit");
     }
+    if ((queue_.gpu().chipId() >> 24) == 5) return refuseWork("A506: texture blits are not implemented");
     closePass();   // the copy reads what the draws before it wrote: their pass's tail first
     std::string why;
     // A copy of a level onto itself. Metal leaves it to the GPU, and an Apple GPU does it -- VectorKit (MapKit's snapshot
@@ -3338,6 +3339,7 @@ bool CommandBuffer::clear(const RenderPass& pass, const render::Options& options
     if (status_ > kEnqueued) {
         return fail("clear after commit");
     }
+    if ((queue_.gpu().chipId() >> 24) == 5) return refuseWork("A506: clear-only passes are not implemented");
     closePass();
     std::string why;
     Piece table;

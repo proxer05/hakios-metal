@@ -142,9 +142,14 @@ hakios_metal_kernel* hakios_metal_kernel_compile_bitcode(const void* bitcode, si
 }
 
 hakios_metal_kernel* hakios_metal_kernel_compile_bitcode_on_device(hakios_metal_device* d, const void* bitcode, size_t size) {
+    return hakios_metal_kernel_compile_bitcode_constants_on_device(d, bitcode, size, nullptr, 0);
+}
+
+hakios_metal_kernel* hakios_metal_kernel_compile_bitcode_constants_on_device(hakios_metal_device* d, const void* bitcode, size_t size,
+    const hakios_metal_constant* constants, unsigned count) {
     if (d == nullptr) { failed("no device for the compiler target"); return nullptr; }
     std::string why;
-    auto k = compileAir(bitcode, size, &why, {}, d->gpu->chipId());
+    auto k = compileAir(bitcode, size, &why, constantsOf(constants, count), d->gpu->chipId());
     if (k == nullptr) { failed(why); return nullptr; }
     auto* r = new hakios_metal_kernel;
     r->kernel = std::move(k);
@@ -952,8 +957,15 @@ static hakios_metal_program* programNewBitcode(const void* vsBitcode, size_t vsS
 
 hakios_metal_program* hakios_metal_program_new_bitcode_on_device(hakios_metal_device* d, const void* vsBitcode, size_t vsSize,
                                                                  const void* fsBitcode, size_t fsSize, unsigned colorPixelFormat) {
+    return hakios_metal_program_new_bitcode_constants_on_device(d, vsBitcode, vsSize, nullptr, 0, fsBitcode, fsSize, nullptr, 0, colorPixelFormat);
+}
+
+hakios_metal_program* hakios_metal_program_new_bitcode_constants_on_device(hakios_metal_device* d, const void* vsBitcode, size_t vsSize,
+    const hakios_metal_constant* vsConstants, unsigned vsCount, const void* fsBitcode, size_t fsSize,
+    const hakios_metal_constant* fsConstants, unsigned fsCount, unsigned colorPixelFormat) {
     if (d == nullptr) { failed("no device for the compiler target"); return nullptr; }
-    return programNewBitcode(vsBitcode, vsSize, {}, fsBitcode, fsSize, {}, colorPixelFormat, d->gpu->chipId());
+    return programNewBitcode(vsBitcode, vsSize, constantsOf(vsConstants, vsCount), fsBitcode, fsSize,
+                             constantsOf(fsConstants, fsCount), colorPixelFormat, d->gpu->chipId());
 }
 
 hakios_metal_program* hakios_metal_program_new_bitcode_constants(const void* vsBitcode, size_t vsSize, const hakios_metal_constant* vsConstants, unsigned vsCount,
@@ -974,7 +986,7 @@ hakios_metal_program* hakios_metal_program_specialize(hakios_metal_program* base
     known.binding = binding;
     known.bytes.assign(static_cast<const uint8_t*>(bytes), static_cast<const uint8_t*>(bytes) + length);
     const Program& was = base->program->program;
-    std::unique_ptr<CompiledStage> fs = compileStage(fsBitcode, fsSize, &why, constantsOf(fsConstants, fsCount), was.fsIboBase, &known);
+    std::unique_ptr<CompiledStage> fs = compileStage(fsBitcode, fsSize, &why, constantsOf(fsConstants, fsCount), was.fsIboBase, &known, was.vs.k.chipId);
     if (fs == nullptr) {
         failed(why);
         return nullptr;

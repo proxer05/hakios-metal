@@ -3,6 +3,7 @@
 #include <cstring>
 #include "hakios-metal/texture.hpp"
 #include "hakios-metal/fake_gpu.hpp"
+#include "hakios-metal/render.hpp"
 #include "test.hpp"
 using namespace hakios::metal;
 namespace {
@@ -71,4 +72,39 @@ TEST(a5xx_texture_tables_have_12_word_slots_and_fd5_swizzles) {
     CHECK(why.find("unsupported") != std::string::npos);
     d.mipLevels = 2;
     CHECK(!Texture::make(gpu, d, &why));
+}
+
+// The full Metal plug-in reaches these entry points before it necessarily draws.
+// They must not submit the A6xx 2D engine's registers to an A506.
+TEST(a5xx_refuses_unported_2d_work_before_emitting_packets) {
+    auto transport = std::make_unique<A506>();
+    auto* fake = transport.get();
+    Gpu gpu(std::move(transport));
+    std::string why;
+    auto queue = CommandQueue::make(gpu, &why);
+    CHECK(queue != nullptr);
+    if (!queue) return;
+    TextureDesc d;
+    d.width = d.height = 64;
+    d.format = PixelFormat::kRGBA8Unorm;
+    d.usage = kTextureUsageRenderTarget | kTextureUsageRead;
+    auto a = Texture::make(gpu, d, &why), b = Texture::make(gpu, d, &why);
+    CHECK(a && b);
+    if (!a || !b) return;
+    RenderPass pass;
+    pass.color0 = a.get();
+    pass.load = LoadAction::kClear;
+    for (unsigned operation = 0; operation < 3; ++operation) {
+        auto cb = queue->commandBuffer();
+        bool ok = operation == 0 ? cb->clear(pass) : operation == 1 ?
+            cb->blit(*a, 0, {0, 0, 64, 64}, *b, 0, {0, 0, 64, 64}, false) :
+            cb->copy(*a->buffer(), 1, *b->buffer(), 0, 7);
+        CHECK(!ok);
+        CHECK(cb->error().find("A506:") != std::string::npos);
+        CHECK_EQ(cb->streamWords(), size_t(0));
+        cb->commit();
+        cb->waitUntilCompleted();
+        CHECK(cb->status() == CommandBuffer::kError);
+    }
+    CHECK_EQ(fake->stats().faults, 0u);
 }
