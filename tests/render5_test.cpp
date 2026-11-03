@@ -248,6 +248,44 @@ TEST(render5_sysmem_draw_words) {
     }
 }
 
+TEST(render5_serves_vertex_driver_params) {
+    // A5xx lowers vertex_id to VERTEX_ID_ZERO_BASE (the VFD's in0) plus the first_vertex driver param, so the VS
+    // declares IR3_CONST_ALLOC_DRIVER_PARAMS even when it binds no buffer (tri_flat_vs: driver_params at c0.x).
+    Program p = handProgram();
+    p.vs.k.driverParamsOffsetVec4 = 0;
+    p.vs.k.constlen = 8;
+    Rig r;
+    Encoded e(r, p, RenderPass{}, triangle());
+    if (!e.ok) std::fprintf(stderr, "  encode refused: \"%s\"\n", e.error.c_str());
+    CHECK(e.ok);
+
+    const uint32_t want = a5xx::loadState4Word0(0, a5xx::kSrcDirect, 8, 4);
+    size_t at = size_t(-1);
+    for (size_t i = 0; i < e.stream.size();) {
+        pm4::Header h = pm4::decode(e.stream.words()[i]);
+        if (h.kind == pm4::Header::kCommand && h.opcode == 0x30 && h.count >= 3 && e.stream.words()[i + 1] == want) {
+            at = i;
+            break;
+        }
+        i += 1 + h.count;
+    }
+    CHECK(at != size_t(-1));
+    if (at != size_t(-1)) {
+        Words s(e.stream.words());
+        CHECK_EQ(pm4::decode(e.stream.words()[at]).count, 19u);   // 3 header words + four vec4s
+        expectWords(s, at + 2, {a5xx::kStateConstants, 0}, "driver params header");
+        // draw_id, vtxid_base, instid_base, vtxcnt_max, is_indexed_draw, then the unused pad.
+        expectWords(s, at + 4, {0, 0, 0, 3, 0}, "driver params");
+    }
+
+    // A fragment stage's dynamic params (frag_size/frag_offset) are not part of this slice.
+    p = handProgram();
+    p.fs.k.driverParamsOffsetVec4 = 0;
+    p.fs.k.constlen = 8;
+    refused(p, RenderPass{}, triangle(),
+            "A506 render: driver parameters are only served to the vertex stage");
+}
+
 TEST(render5_refusals_leave_the_stream_empty) {
     Program p = handProgram();
     RenderPass pass;

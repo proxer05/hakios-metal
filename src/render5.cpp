@@ -39,9 +39,19 @@ void load(pm4::Stream& s, uint32_t block, uint32_t offset, const uint32_t* w, ui
     p.insert(p.end(), w, w + count);
     s.packet(0x30, p.data(), uint32_t(p.size()));
 }
-bool constants(pm4::Stream& s, const Kernel& k, const Bindings& b, uint32_t block, uint64_t program, std::string* why) {
-    if (k.driverParamsOffsetVec4 >= 0 || k.numSsbos || k.numBufs)
-        return refuse(why, "A506 render: shader driver parameters and storage buffers are not implemented");
+bool constants(pm4::Stream& s, const Kernel& k, const Bindings& b, uint32_t block, uint64_t program,
+               const uint32_t* driverParams, std::string* why) {
+    if (k.numSsbos || k.numBufs)
+        return refuse(why, "A506 render: shader storage buffers are not implemented");
+    if (k.driverParamsOffsetVec4 >= 0) {
+        // ir3's a5xx VS takes first_vertex/base_instance/is_indexed_draw from
+        // four driver-param vec4s; the FS's dynamic params stay unsupported.
+        if (driverParams == nullptr)
+            return refuse(why, "A506 render: driver parameters are only served to the vertex stage");
+        if (uint32_t(k.driverParamsOffsetVec4) + 4 > k.constlen)
+            return refuse(why, "A506 render: driver parameters exceed constlen");
+        load(s, block, uint32_t(k.driverParamsOffsetVec4), driverParams, 16);
+    }
     if (k.numImmediates) {
         if (!k.immediates || k.immediatesOffsetVec4 + (k.numImmediates + 3) / 4 > k.constlen)
             return refuse(why, "A506 render: immediates exceed constlen");
@@ -147,8 +157,16 @@ bool encode(pm4::Stream& stream, const Program& p, const RenderPass& pass, const
     }
     TextureTables5 vt, ft;
     if (!textureTables5(vs.k, vsb, &vt, why) || !textureTables5(fs.k, feedback, &ft, why)) return false;
+    // ir3_driver_params_vs: draw_id, vtxid_base, instid_base, vtxcnt_max, is_indexed_draw. The slice draws
+    // nonindexed triangles from vertex zero with no base instance, but the values are still filled in.
+    uint32_t driverParams[16] = {};
+    driverParams[0] = 0;                       // draw_id
+    driverParams[1] = d.vertexStart;           // vtxid_base
+    driverParams[2] = d.baseInstance;          // instid_base
+    driverParams[3] = d.vertexCount;           // vtxcnt_max
+    driverParams[4] = d.indexBuffer ? ~0u : 0; // is_indexed_draw
     pm4::Stream vc, fc;
-    if (!constants(vc, vs.k, vsb, 8, va, why) || !constants(fc, fs.k, fsb, 12, fa, why)) return false;
+    if (!constants(vc, vs.k, vsb, 8, va, driverParams, why) || !constants(fc, fs.k, fsb, 12, fa, nullptr, why)) return false;
     Viewport v = d.viewport;
     if (v.width == 0) v = {0, 0, double(w), double(h), 0, 1};
     if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.width) || !std::isfinite(v.height) ||
